@@ -1,0 +1,55 @@
+# =============================================================
+# Eirdom — Home Assistant (Container install)
+# Smart home hub — automations, dashboards, family surface
+#
+# Install method: HA Container (one of the two supported
+# methods as of 2025.12, alongside HAOS). Supersedes the
+# ADR-041 HAOS-on-Proxmox VM plan — see docs/decisions.md.
+#
+# Authentication: HA native auth via chain-public
+#   (Authentik ForwardAuth breaks the companion app and
+#   inbound webhooks — same pattern as Actual Budget)
+#
+# Networking: network_mode host — REQUIRED for mDNS/SSDP
+#   discovery (HomeKit, cast, Matter, ESPHome). This means:
+#   - No `proxy` network attachment, no Traefik labels
+#   - Routed via the file provider instead:
+#     docker/traefik/dynamic/routers.yml → homeassistant-svc
+#     → http://10.1.50.10:8123
+#   - HA listens on the host at 10.1.50.10:8123
+#
+# Version pinning: HA ships monthly with breaking changes.
+#   Patch releases (x.y.Z) land Fridays and are bugfix-only —
+#   bump those freely. Read the release notes BEFORE bumping
+#   the minor (x.Y). Do not switch this to :latest.
+#
+# Security: deliberately NOT privileged (HA docs example uses
+#   privileged: true — unnecessary until hardware passthrough).
+#   Add explicit `devices:` entries when Zigbee/Z-Wave arrive.
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # Home Assistant Core — official container
+  # Config in ${DOCKER_DATA_PATH}/homeassistant (backup.sh)
+  # -----------------------------------------------------------
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:2026.7.1
+    container_name: homeassistant
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - ${DOCKER_DATA_PATH}/homeassistant:/config
+      - /etc/localtime:/etc/localtime:ro
+      # Bluetooth via host BlueZ — uncomment if ever needed:
+      # - /run/dbus:/run/dbus:ro
+    network_mode: host
+    restart: unless-stopped
+    # Future Zigbee coordinator — uncomment and set the
+    # stable by-id path when the dongle arrives:
+    # devices:
+    #   - /dev/serial/by-id/usb-XXXX:/dev/ttyUSB0

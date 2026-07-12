@@ -1,0 +1,102 @@
+# =============================================================
+# Eirdom — Mealie
+# Recipe management and meal planning
+#
+# Authentication: Authentik ForwardAuth (chain-standard)
+# Dependencies: PostgreSQL
+#
+# Use cases:
+#   - Central family recipe library
+#   - Import recipes from any URL automatically
+#   - Weekly meal planning with calendar view
+#   - Shopping list generation from meal plan
+#   - Integrates with Grocy for pantry-aware shopping lists
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # PostgreSQL — Mealie database
+  # Isolated on mealie-internal network
+  # -----------------------------------------------------------
+  mealie-db:
+    image: postgres:16-alpine
+    container_name: mealie-db
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      POSTGRES_DB: ${MEALIE_DB_NAME}
+      POSTGRES_USER: ${MEALIE_DB_USER}
+      POSTGRES_PASSWORD: ${MEALIE_DB_PASSWORD}
+    volumes:
+      - ${DOCKER_DATA_PATH}/mealie/db:/var/lib/postgresql/data
+    networks:
+      - mealie-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MEALIE_DB_USER} -d ${MEALIE_DB_NAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # -----------------------------------------------------------
+  # Mealie — Recipe management and meal planning
+  # -----------------------------------------------------------
+  mealie:
+    image: ghcr.io/mealie-recipes/mealie:latest
+    container_name: mealie
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+      # Database connection
+      DB_ENGINE: postgres
+      POSTGRES_USER: ${MEALIE_DB_USER}
+      POSTGRES_PASSWORD: ${MEALIE_DB_PASSWORD}
+      POSTGRES_SERVER: mealie-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${MEALIE_DB_NAME}
+      # Application settings
+      BASE_URL: https://mealie.${ROOT_DOMAIN}
+      # SMTP for meal plan notifications — inherits from root .env
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+      SMTP_AUTH_STRATEGY: TLS
+      SMTP_FROM_NAME: "Eirdom Mealie"
+      # Default admin user — change after first login
+      DEFAULT_EMAIL: ${MEALIE_ADMIN_EMAIL}
+      DEFAULT_PASSWORD: ${MEALIE_ADMIN_PASSWORD}
+      # Allow recipe imports from external URLs
+      ALLOW_SIGNUP: "false"
+    volumes:
+      - ${DOCKER_DATA_PATH}/mealie/data:/app/data
+    networks:
+      - proxy
+      - mealie-internal
+    depends_on:
+      mealie-db:
+        condition: service_healthy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mealie.rule=Host(`mealie.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.mealie.entrypoints=websecure"
+      - "traefik.http.routers.mealie.tls=true"
+      - "traefik.http.routers.mealie.tls.certresolver=cloudflare"
+      - "traefik.http.services.mealie.loadbalancer.server.port=9000"
+      # chain-standard — Authentik SSO
+      - "traefik.http.routers.mealie.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+networks:
+  proxy:
+    external: true
+  mealie-internal:
+    driver: bridge
+    internal: true

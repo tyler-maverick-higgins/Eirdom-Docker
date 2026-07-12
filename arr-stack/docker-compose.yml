@@ -1,0 +1,484 @@
+# =============================================================
+# Eirdom — ARR Stack
+# Services: Gluetun (VPN), Radarr (HD+4K), Sonarr (HD+4K),
+#           Lidarr, Prowlarr, Bazarr, qBittorrent,
+#           Recyclarr, FlareSolverr
+#
+# Storage — three-tier layout (ADR-043):
+#   Tier 1  Configs          ${DOCKER_DATA_PATH}     → OS/Docker SSD
+#   Tier 2  In-progress dl    ${DOWNLOADS_CACHE_PATH} → 250GB SSD (/incomplete)
+#   Tier 3  Completed + libs  ${MEDIA_PATH} (/media/arr, 3TB WD Red) → /data
+#   Completed downloads and libraries share /data (Tier 3), so
+#   hardlinks work. Incomplete downloads live on their own SSD;
+#   the completion-move (Tier 2 → Tier 3) is a cross-filesystem
+#   copy that doubles as the cache's auto-clean.
+#
+# VPN: AirVPN WireGuard via Gluetun (ADR-042)
+#   - qBittorrent shares Gluetun's network namespace
+#   - Kill switch built into Gluetun — if VPN drops,
+#     qBittorrent loses all network access immediately
+#   - All other ARR services reach qBittorrent internally
+#     via http://gluetun:8080 (never over the internet)
+#   - Traefik labels are on Gluetun, not qBittorrent
+# =============================================================
+
+# =============================================================
+# STORAGE LAYOUT
+#
+# Tier 3 — ${MEDIA_PATH} (/media/arr, 3TB WD Red) = /data in container
+#   /data/
+#   ├── downloads/
+#   │   └── complete/             qBittorrent finished (seeds from here)
+#   │       ├── radarr/           → Radarr HD imports
+#   │       ├── radarr-4k/        → Radarr 4K imports
+#   │       ├── sonarr/           → Sonarr HD imports
+#   │       ├── sonarr-4k/        → Sonarr 4K imports
+#   │       ├── lidarr/           → Lidarr imports
+#   │       └── manual/           → Manual downloads
+#   ├── radarr/                   HD movie library (EXISTING)
+#   ├── radarr-4k/                4K movie library (EXISTING)
+#   ├── sonarr/                   HD TV library    (EXISTING)
+#   ├── sonarr-4k/                4K TV library    (EXISTING)
+#   └── lidarr/                   Music library    (EXISTING)
+#
+# Tier 2 — ${DOWNLOADS_CACHE_PATH} (250GB SSD) = /incomplete in container
+#   qBittorrent active downloads only; clears as torrents finish.
+#
+# Tier 1 — ${DOCKER_DATA_PATH} (OS/Docker SSD)
+#   Per-service config dirs: <service>/  (moved off /media/arr/config)
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # Gluetun — WireGuard VPN client (AirVPN)
+  #
+  # qBittorrent shares this container's network namespace via
+  # network_mode: service:gluetun — it has no independent
+  # network interface of its own.
+  #
+  # Kill switch: Gluetun drops ALL traffic if VPN disconnects.
+  # Port forwarding: AirVPN reserved port (set in the AirVPN
+  # Client Area → Ports), passed via FIREWALL_VPN_INPUT_PORTS.
+  # The reserved port is account-bound and persists across
+  # servers and reconnects.
+  #
+  # Traefik labels live here (not on qBittorrent) because
+  # Traefik sees the network interface of the labeled container.
+  #
+  # Server selection uses SERVER_COUNTRIES — Gluetun ships
+  # AirVPN's server keys, so no endpoint IP or server public
+  # key is needed. Confirm the required var set at:
+  #   github.com/qdm12/gluetun-wiki → setup/providers/airvpn
+  # -----------------------------------------------------------
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      VPN_SERVICE_PROVIDER: airvpn
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY}
+      WIREGUARD_PRESHARED_KEY: ${WIREGUARD_PRESHARED_KEY}
+      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES}
+      # Server selection (replaces TorGuard's endpoint IP/port).
+      # Gluetun resolves an AirVPN endpoint from this filter.
+      SERVER_COUNTRIES: ${VPN_SERVER_COUNTRIES}
+      # Kill switch — block all non-VPN traffic if tunnel drops
+      # Gluetun enforces this via iptables rules on the tun interface
+      FIREWALL: on
+      FIREWALL_OUTBOUND_SUBNETS: 10.1.50.0/24
+      # Port forwarding — AirVPN reserved port (Client Area → Ports).
+      # Account-bound and static; set qBittorrent's listening port
+      # to the same value.
+      FIREWALL_VPN_INPUT_PORTS: ${VPN_FORWARDED_PORT}
+      HTTPPROXY: off
+      SHADOWSOCKS: off
+      TZ: ${TZ}
+    volumes:
+      - ${DOCKER_DATA_PATH}/gluetun:/gluetun
+    networks:
+      - proxy
+      - arr-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # Traefik labels go here — NOT on qbittorrent
+    # qBittorrent has no network of its own (uses Gluetun's)
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.qbittorrent.rule=Host(`qbit.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.qbittorrent.entrypoints=websecure"
+      - "traefik.http.routers.qbittorrent.tls=true"
+      - "traefik.http.routers.qbittorrent.tls.certresolver=cloudflare"
+      - "traefik.http.services.qbittorrent.loadbalancer.server.port=8080"
+      - "traefik.http.routers.qbittorrent.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+  # -----------------------------------------------------------
+  # qBittorrent — Torrent download client
+  # Routes ALL traffic through Gluetun's WireGuard tunnel
+  # Has NO independent network — shares Gluetun's namespace
+  #
+  # ARR apps reach qBittorrent at: http://gluetun:8080
+  # (NOT http://qbittorrent:8080 — that hostname has no network)
+  #
+  # Storage (ADR-043):
+  #   /config      Tier 1 — OS/Docker SSD
+  #   /data        Tier 3 — 3TB WD Red (completed + libraries)
+  #   /incomplete  Tier 2 — 250GB SSD (active downloads)
+  # In the Web UI: incomplete path → /incomplete, completed →
+  #   /data/downloads/complete. On finish, qBit moves the file
+  #   from the SSD to /data (cross-FS), keeping the cache clear.
+  # Auto-remove at seed goal (set in Web UI; respect private-
+  #   tracker ratio/seed-time rules to avoid hit-and-run bans).
+  # -----------------------------------------------------------
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    # Share Gluetun's network — this is the VPN tunnel
+    network_mode: service:gluetun
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+      WEBUI_PORT: 8080
+    volumes:
+      - ${DOCKER_DATA_PATH}/qbittorrent:/config   # Tier 1 — OS SSD
+      - ${MEDIA_PATH}:/data                        # Tier 3 — 3TB (completed + libraries)
+      - ${DOWNLOADS_CACHE_PATH}:/incomplete        # Tier 2 — 250GB SSD (active downloads)
+    restart: unless-stopped
+    # NO labels here — Traefik labels are on gluetun above
+    # NO networks here — uses network_mode: service:gluetun
+
+  # -----------------------------------------------------------
+  # Prowlarr — Central indexer manager
+  # Add ALL indexers here — never directly in Radarr/Sonarr
+  # Syncs to all four ARR instances via Full Sync
+  # -----------------------------------------------------------
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+    volumes:
+      - ${DOCKER_DATA_PATH}/prowlarr:/config
+    networks:
+      - proxy
+      - arr-internal
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prowlarr.rule=Host(`prowlarr.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.prowlarr.entrypoints=websecure"
+      - "traefik.http.routers.prowlarr.tls=true"
+      - "traefik.http.routers.prowlarr.tls.certresolver=cloudflare"
+      - "traefik.http.services.prowlarr.loadbalancer.server.port=9696"
+      - "traefik.http.routers.prowlarr.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+  # -----------------------------------------------------------
+  # Radarr — HD Movie automation (1080p and below)
+  # Root folder:  /data/radarr/
+  # Import from:  /data/downloads/complete/radarr/
+  # Download client: http://gluetun:8080 (qBit via VPN tunnel)
+  # -----------------------------------------------------------
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+    volumes:
+      - ${DOCKER_DATA_PATH}/radarr:/config
+      - ${MEDIA_PATH}:/data
+    networks:
+      - proxy
+      - arr-internal
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      prowlarr:
+        condition: service_started
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.radarr.rule=Host(`radarr.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.radarr.entrypoints=websecure"
+      - "traefik.http.routers.radarr.tls=true"
+      - "traefik.http.routers.radarr.tls.certresolver=cloudflare"
+      - "traefik.http.services.radarr.loadbalancer.server.port=7878"
+      - "traefik.http.routers.radarr.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+  # -----------------------------------------------------------
+  # Radarr 4K — 4K/UHD Movie automation
+  # Root folder:  /data/radarr-4k/
+  # Import from:  /data/downloads/complete/radarr-4k/
+  # Download client: http://gluetun:8080
+  # -----------------------------------------------------------
+  radarr-4k:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr-4k
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+    volumes:
+      - ${DOCKER_DATA_PATH}/radarr-4k:/config
+      - ${MEDIA_PATH}:/data
+    networks:
+      - proxy
+      - arr-internal
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      prowlarr:
+        condition: service_started
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.radarr-4k.rule=Host(`radarr4k.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.radarr-4k.entrypoints=websecure"
+      - "traefik.http.routers.radarr-4k.tls=true"
+      - "traefik.http.routers.radarr-4k.tls.certresolver=cloudflare"
+      - "traefik.http.services.radarr-4k.loadbalancer.server.port=7878"
+      - "traefik.http.routers.radarr-4k.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+  # -----------------------------------------------------------
+  # Sonarr — HD TV automation (1080p and below)
+  # Root folder:  /data/sonarr/
+  # Import from:  /data/downloads/complete/sonarr/
+  # Download client: http://gluetun:8080
+  # -----------------------------------------------------------
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+    volumes:
+      - ${DOCKER_DATA_PATH}/sonarr:/config
+      - ${MEDIA_PATH}:/data
+    networks:
+      - proxy
+      - arr-internal
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      prowlarr:
+        condition: service_started
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sonarr.rule=Host(`sonarr.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.sonarr.entrypoints=websecure"
+      - "traefik.http.routers.sonarr.tls=true"
+      - "traefik.http.routers.sonarr.tls.certresolver=cloudflare"
+      - "traefik.http.services.sonarr.loadbalancer.server.port=8989"
+      - "traefik.http.routers.sonarr.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+  # -----------------------------------------------------------
+  # Sonarr 4K — 4K/UHD TV automation
+  # Root folder:  /data/sonarr-4k/
+  # Import from:  /data/downloads/complete/sonarr-4k/
+  # Download client: http://gluetun:8080
+  # -----------------------------------------------------------
+  sonarr-4k:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr-4k
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+    volumes:
+      - ${DOCKER_DATA_PATH}/sonarr-4k:/config
+      - ${MEDIA_PATH}:/data
+    networks:
+      - proxy
+      - arr-internal
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      prowlarr:
+        condition: service_started
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sonarr-4k.rule=Host(`sonarr4k.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.sonarr-4k.entrypoints=websecure"
+      - "traefik.http.routers.sonarr-4k.tls=true"
+      - "traefik.http.routers.sonarr-4k.tls.certresolver=cloudflare"
+      - "traefik.http.services.sonarr-4k.loadbalancer.server.port=8989"
+      - "traefik.http.routers.sonarr-4k.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+  # -----------------------------------------------------------
+  # Lidarr — Music automation
+  # Root folder:  /data/lidarr/
+  # Import from:  /data/downloads/complete/lidarr/
+  # Download client: http://gluetun:8080
+  # -----------------------------------------------------------
+  lidarr:
+    image: lscr.io/linuxserver/lidarr:latest
+    container_name: lidarr
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+    volumes:
+      - ${DOCKER_DATA_PATH}/lidarr:/config
+      - ${MEDIA_PATH}:/data
+    networks:
+      - proxy
+      - arr-internal
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      prowlarr:
+        condition: service_started
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.lidarr.rule=Host(`lidarr.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.lidarr.entrypoints=websecure"
+      - "traefik.http.routers.lidarr.tls=true"
+      - "traefik.http.routers.lidarr.tls.certresolver=cloudflare"
+      - "traefik.http.services.lidarr.loadbalancer.server.port=8686"
+      - "traefik.http.routers.lidarr.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+  # -----------------------------------------------------------
+  # Bazarr — Subtitle automation
+  # Connects to both Radarr and both Sonarr instances
+  # -----------------------------------------------------------
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+    volumes:
+      - ${DOCKER_DATA_PATH}/bazarr:/config
+      - ${MEDIA_PATH}:/data
+    networks:
+      - proxy
+      - arr-internal
+    depends_on:
+      - radarr
+      - radarr-4k
+      - sonarr
+      - sonarr-4k
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.bazarr.rule=Host(`bazarr.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.bazarr.entrypoints=websecure"
+      - "traefik.http.routers.bazarr.tls=true"
+      - "traefik.http.routers.bazarr.tls.certresolver=cloudflare"
+      - "traefik.http.services.bazarr.loadbalancer.server.port=6767"
+      - "traefik.http.routers.bazarr.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+  # -----------------------------------------------------------
+  # FlareSolverr — Cloudflare challenge bypass for Prowlarr
+  # Internal only — no Traefik exposure
+  # Prowlarr reaches it at http://flaresolverr:8191
+  # -----------------------------------------------------------
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    shm_size: 1gb
+#    network_mode: service:gluetun      # ADD — share the VPN namespace
+ #   depends_on:                        # ADD — wait for the tunnel to be up
+  #    gluetun:
+   #     condition: service_healthy
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      LOG_LEVEL: info
+      LOG_HTML: false
+      CAPTCHA_SOLVER: none
+      TZ: ${TZ}
+    networks:
+      - arr-internal
+      - proxy
+    restart: unless-stopped
+
+  # -----------------------------------------------------------
+  # Recyclarr — TRaSH Guides quality profile sync
+  # Manages HD and 4K quality profiles for all four ARR apps
+  # Config: ${DOCKER_DATA_PATH}/recyclarr/recyclarr.yml
+  # -----------------------------------------------------------
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:8
+    container_name: recyclarr
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      TZ: ${TZ}
+      RECYCLARR_CREATE_CONFIG: "true"
+    volumes:
+      - ${DOCKER_DATA_PATH}/recyclarr:/config
+    networks:
+      - arr-internal
+      - proxy
+    depends_on:
+      - radarr
+      - radarr-4k
+      - sonarr
+      - sonarr-4k
+    restart: unless-stopped
+
+networks:
+  proxy:
+    external: true
+  arr-internal:
+    driver: bridge
+    internal: true

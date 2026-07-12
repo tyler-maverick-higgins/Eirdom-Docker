@@ -1,0 +1,160 @@
+# =============================================================
+# Traefik — Dynamic Configuration
+# middlewares.yml
+# Loaded from /config/dynamic/ via file provider
+# =============================================================
+
+http:
+  middlewares:
+
+    # -----------------------------------------------------------
+    # Authentik ForwardAuth — Global SSO middleware
+    # Applied to all internal services by default
+    # Services that handle their own auth (Jellyfin, Jellyseerr)
+    # opt out by not referencing this middleware
+    # -----------------------------------------------------------
+    authentik:
+      forwardAuth:
+        address: "http://authentik-server:9000/outpost.goauthentik.io/auth/traefik"
+        trustForwardHeader: true
+        authResponseHeaders:
+          - X-authentik-username
+          - X-authentik-groups
+          - X-authentik-email
+          - X-authentik-name
+          - X-authentik-uid
+          - X-authentik-jwt
+          - X-authentik-meta-jwks
+          - X-authentik-meta-outpost
+          - X-authentik-meta-provider
+          - X-authentik-meta-app
+          - X-authentik-meta-version
+
+    # -----------------------------------------------------------
+    # Security Headers — applied to all HTTPS responses
+    # -----------------------------------------------------------
+    security-headers:
+      headers:
+        # sslRedirect removed — option deleted in Traefik v3, and the
+        # `web` entrypoint already does a global HTTP->HTTPS redirect.
+        forceSTSHeader: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "strict-origin-when-cross-origin"
+        permissionsPolicy: "camera=(), microphone=(), geolocation=()"
+        customResponseHeaders:
+          X-Robots-Tag: "noindex, nofollow, nosnippet, noarchive"
+          server: ""
+
+    # -----------------------------------------------------------
+    # Rate Limiting — general purpose rate limiter
+    # Applied to public-facing services
+    # -----------------------------------------------------------
+    rate-limit:
+      rateLimit:
+        average: 100
+        burst: 50
+        period: 1m
+
+    # -----------------------------------------------------------
+    # Rate Limiting — strict for auth endpoints
+    # Applied to Authentik login page to prevent brute force
+    # -----------------------------------------------------------
+    rate-limit-auth:
+      rateLimit:
+        average: 10
+        burst: 5
+        period: 1m
+
+    # Actual Budget — burst-heavy SQLite/migration fetches
+    # The general rate-limit (100/50) 429s the budget-load burst,
+    # which Actual then tries to execute as SQL. Needs a much higher ceiling.
+    rate-limit-actual:
+      rateLimit:
+        average: 1000
+        burst: 500
+        period: 1m
+
+    chain-actual:
+      chain:
+        middlewares:
+          - security-headers
+          - rate-limit-actual
+
+    # -----------------------------------------------------------
+    # www redirect — canonical domain enforcement
+    # Redirects www.eirdom.homes to eirdom.homes
+    # -----------------------------------------------------------
+    www-redirect:
+      redirectRegex:
+        regex: "^https://www\\.(.+)"
+        replacement: "https://${1}"
+        permanent: true
+
+    # -----------------------------------------------------------
+    # VLAN 10 IP Allowlist
+    # Restricts access to Corporate network only
+    # Used for Adminer, Traefik dashboard, and other admin UIs
+    # Renamed from ipWhiteList — Traefik v3 renamed the middleware
+    # to ipAllowList (same options); the old key no longer loads.
+    # -----------------------------------------------------------
+    ipallowlist-corporate:
+      ipAllowList:
+        sourceRange:
+          - "10.1.10.0/24"
+
+    # -----------------------------------------------------------
+    # Middleware chains
+    # Combine multiple middlewares into named chains for reuse
+    # -----------------------------------------------------------
+
+    # Standard chain — applied to most internal services
+    # Authentik SSO + security headers
+    chain-standard:
+      chain:
+        middlewares:
+          - authentik
+          - security-headers
+
+    # Public chain — applied to externally accessible services
+    # No Authentik (services handle own auth) + security headers + rate limit
+    chain-public:
+      chain:
+        middlewares:
+          - security-headers
+          - rate-limit
+
+    # Admin chain — internal admin UIs
+    # Authentik SSO + VLAN 10 IP whitelist + security headers
+    chain-admin:
+      chain:
+        middlewares:
+          - authentik
+          - ipallowlist-corporate
+          - security-headers
+
+    # Strict limiter for the WordPress brute-force surface
+    rate-limit-wp-login:
+      rateLimit:
+        average: 6
+        burst: 3
+        period: 1m
+
+    # WordPress — general (everything except login)
+    chain-wordpress:
+      chain:
+        middlewares:
+          - www-redirect
+          - security-headers
+          - rate-limit
+
+    # WordPress — login/xmlrpc only (strict)
+    chain-wordpress-login:
+      chain:
+        middlewares:
+          - www-redirect
+          - security-headers
+          - rate-limit-wp-login

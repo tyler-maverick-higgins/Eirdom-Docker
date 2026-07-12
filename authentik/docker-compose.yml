@@ -1,0 +1,144 @@
+# =============================================================
+# Eirdom — Authentik 2026.2
+# Identity Provider / SSO
+# Integrates with Active Directory via LDAP
+# Protects all internal services via Traefik ForwardAuth
+# No Redis required — fully PostgreSQL-based since 2025.10
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # PostgreSQL — Authentik database
+  # Isolated on authentik-internal network
+  # Not reachable from Traefik or other stacks
+  # -----------------------------------------------------------
+  authentik-postgres:
+    image: postgres:16-alpine
+    container_name: authentik-postgres
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      POSTGRES_DB: ${AUTHENTIK_DB_NAME}
+      POSTGRES_USER: ${AUTHENTIK_DB_USER}
+      POSTGRES_PASSWORD: ${AUTHENTIK_DB_PASSWORD}
+    volumes:
+      - ${DOCKER_DATA_PATH}/authentik/postgres:/var/lib/postgresql/data
+    networks:
+      - authentik-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${AUTHENTIK_DB_USER} -d ${AUTHENTIK_DB_NAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # -----------------------------------------------------------
+  # Authentik Server
+  # Handles authentication, admin UI, and outpost proxy
+  # -----------------------------------------------------------
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2026.5.3
+    container_name: authentik-server
+    command: server
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      AUTHENTIK_REDIS__HOST: ""
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_DB_USER}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_DB_NAME}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_DB_PASSWORD}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_EMAIL__HOST: ${SMTP_HOST}
+      AUTHENTIK_EMAIL__PORT: ${SMTP_PORT}
+      AUTHENTIK_EMAIL__USERNAME: ${SMTP_USER}
+      AUTHENTIK_EMAIL__PASSWORD: ${SMTP_PASSWORD}
+      AUTHENTIK_EMAIL__USE_TLS: "true"
+      AUTHENTIK_EMAIL__FROM: ${SMTP_FROM_EMAIL}
+      POSTGRES_DB: ${AUTHENTIK_DB_NAME}
+      POSTGRES_USER: ${AUTHENTIK_DB_USER}
+      POSTGRES_PASSWORD: ${AUTHENTIK_DB_PASSWORD}
+    volumes:
+      - ${DOCKER_DATA_PATH}/authentik/media:/data/media
+      - ${DOCKER_DATA_PATH}/authentik/templates:/templates
+      - ${DOCKER_DATA_PATH}/authentik/certs:/certs
+    networks:
+      - proxy
+      - authentik-internal
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      # Main Authentik UI
+      - "traefik.http.routers.authentik.rule=Host(`auth.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.authentik.entrypoints=websecure"
+      - "traefik.http.routers.authentik.tls=true"
+      - "traefik.http.routers.authentik.tls.certresolver=cloudflare"
+      - "traefik.http.routers.authentik.service=authentik-svc"
+      - "traefik.http.routers.authentik.middlewares=security-headers@file,rate-limit@file"
+      - "traefik.http.services.authentik-svc.loadbalancer.server.port=9000"
+      # ForwardAuth catch-all route
+      # Handles the Authentik callback URL for all ForwardAuth flows
+     # - "traefik.http.routers.authentik-outpost.rule=HostRegexp(`^.+$`) && PathPrefix(`/outpost.goauthentik.io/`)"
+     # - "traefik.http.routers.authentik-outpost.entrypoints=websecure"
+     # - "traefik.http.routers.authentik-outpost.tls=true"
+     # - "traefik.http.routers.authentik-outpost.tls.certresolver=cloudflare"
+     # - "traefik.http.routers.authentik-outpost.service=authentik-svc"
+     # - "traefik.http.routers.authentik-outpost.priority=100"
+
+  # -----------------------------------------------------------
+  # Authentik Worker
+  # Handles background tasks — email, LDAP sync, events
+  # Must run alongside the server
+  # -----------------------------------------------------------
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2026.5.3
+    container_name: authentik-worker
+    command: worker
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      AUTHENTIK_REDIS__HOST: ""
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_DB_USER}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_DB_NAME}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_DB_PASSWORD}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_EMAIL__HOST: ${SMTP_HOST}
+      AUTHENTIK_EMAIL__PORT: ${SMTP_PORT}
+      AUTHENTIK_EMAIL__USERNAME: ${SMTP_USER}
+      AUTHENTIK_EMAIL__PASSWORD: ${SMTP_PASSWORD}
+      AUTHENTIK_EMAIL__USE_TLS: "true"
+      AUTHENTIK_EMAIL__FROM: ${SMTP_FROM_EMAIL}
+      POSTGRES_DB: ${AUTHENTIK_DB_NAME}
+      POSTGRES_USER: ${AUTHENTIK_DB_USER}
+      POSTGRES_PASSWORD: ${AUTHENTIK_DB_PASSWORD}
+    volumes:
+      - ${DOCKER_DATA_PATH}/authentik/media:/data/media
+      - ${DOCKER_DATA_PATH}/authentik/templates:/templates
+      - ${DOCKER_DATA_PATH}/authentik/certs:/certs
+      # Worker needs Docker socket to manage outpost containers
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - authentik-internal
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  proxy:
+    external: true
+  authentik-internal:
+    driver: bridge
+    internal: true
+  

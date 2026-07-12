@@ -1,0 +1,122 @@
+# =============================================================
+# Eirdom — Paperless-ngx
+# Document management — scan, OCR, tag, search
+#
+# Authentication: Authentik ForwardAuth (chain-standard)
+# Dependencies: PostgreSQL (DB), Redis (task queue)
+# Storage: ${DOCKER_DATA_PATH}/paperless + ${MEDIA_PATH}/paperless
+#
+# Document inbox: drop files in /media/arr/paperless/consume/
+# and Paperless ingests them automatically
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # PostgreSQL — Paperless database
+  # Isolated on paperless-internal network
+  # -----------------------------------------------------------
+  paperless-db:
+    image: postgres:16-alpine
+    container_name: paperless-db
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      POSTGRES_DB: ${PAPERLESS_DB_NAME}
+      POSTGRES_USER: ${PAPERLESS_DB_USER}
+      POSTGRES_PASSWORD: ${PAPERLESS_DB_PASSWORD}
+    volumes:
+      - ${DOCKER_DATA_PATH}/paperless/db:/var/lib/postgresql/data
+    networks:
+      - paperless-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PAPERLESS_DB_USER} -d ${PAPERLESS_DB_NAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # -----------------------------------------------------------
+  # Redis — Paperless task queue and caching
+  # -----------------------------------------------------------
+  paperless-redis:
+    image: valkey/valkey:8-alpine
+    container_name: paperless-redis
+    volumes:
+      - ${DOCKER_DATA_PATH}/paperless/redis:/data
+    networks:
+      - paperless-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # -----------------------------------------------------------
+  # Paperless-ngx — Document management
+  # Drop PDFs/images in the consume folder and Paperless
+  # automatically OCRs, tags, and indexes them
+  # -----------------------------------------------------------
+  paperless:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    container_name: paperless
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      PAPERLESS_REDIS: redis://paperless-redis:6379
+      PAPERLESS_DBHOST: paperless-db
+      PAPERLESS_DBNAME: ${PAPERLESS_DB_NAME}
+      PAPERLESS_DBUSER: ${PAPERLESS_DB_USER}
+      PAPERLESS_DBPASS: ${PAPERLESS_DB_PASSWORD}
+      PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY}
+      PAPERLESS_URL: https://paperless.${ROOT_DOMAIN}
+      PAPERLESS_TIME_ZONE: ${TZ}
+      PAPERLESS_OCR_LANGUAGE: eng
+      # PAPERLESS_ADMIN_USER and PAPERLESS_ADMIN_PASSWORD are
+      # used ONLY on first run to create the initial superuser.
+      # Delete these from .env after first login.
+      #PAPERLESS_ADMIN_USER: ${PAPERLESS_ADMIN_USER}
+      #PAPERLESS_ADMIN_PASSWORD: ${PAPERLESS_ADMIN_PASSWORD}
+      #PAPERLESS_ADMIN_MAIL: ${PAPERLESS_ADMIN_EMAIL}
+      # Allow Authentik to pass the authenticated user header
+      # so Paperless knows who is logged in via SSO
+      PAPERLESS_HTTP_REMOTE_USER_HEADER_NAME: HTTP_X_AUTHENTIK_USERNAME
+      USERMAP_UID: ${PUID}
+      USERMAP_GID: ${PGID}
+    volumes:
+      - ${DOCKER_DATA_PATH}/paperless/data:/usr/src/paperless/data
+      - ${DOCKER_DATA_PATH}/paperless/media:/usr/src/paperless/media
+      - ${MEDIA_PATH}/paperless/consume:/usr/src/paperless/consume
+      - ${MEDIA_PATH}/paperless/export:/usr/src/paperless/export
+    networks:
+      - proxy
+      - paperless-internal
+    depends_on:
+      paperless-db:
+        condition: service_healthy
+      paperless-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.paperless.rule=Host(`paperless.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.paperless.entrypoints=websecure"
+      - "traefik.http.routers.paperless.tls=true"
+      - "traefik.http.routers.paperless.tls.certresolver=cloudflare"
+      - "traefik.http.services.paperless.loadbalancer.server.port=8000"
+      # chain-standard — Authentik SSO
+      # PAPERLESS_HTTP_REMOTE_USER_HEADER_NAME lets Paperless
+      # read the Authentik username header and auto-login the user
+      - "traefik.http.routers.paperless.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+networks:
+  proxy:
+    external: true
+  paperless-internal:
+    driver: bridge
+    internal: true

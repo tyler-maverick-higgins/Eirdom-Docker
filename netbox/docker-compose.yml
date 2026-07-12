@@ -1,0 +1,207 @@
+# =============================================================
+# Eirdom — NetBox v4.5
+# Network Documentation & IPAM
+# Includes: netbox_unifi_sync plugin
+# Authentication: Active Directory LDAP via EIRDOM-DC-01
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # PostgreSQL — NetBox database
+  # Isolated on netbox-internal network
+  # -----------------------------------------------------------
+  netbox-postgres:
+    image: postgres:16-alpine
+    container_name: netbox-postgres
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      POSTGRES_DB: ${NETBOX_DB_NAME}
+      POSTGRES_USER: ${NETBOX_DB_USER}
+      POSTGRES_PASSWORD: ${NETBOX_DB_PASSWORD}
+    volumes:
+      - ${DOCKER_DATA_PATH}/netbox/postgres:/var/lib/postgresql/data
+    networks:
+      - netbox-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${NETBOX_DB_USER} -d ${NETBOX_DB_NAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # -----------------------------------------------------------
+  # Redis — NetBox task queue and caching
+  # NetBox still requires Redis (unlike Authentik which dropped it)
+  # -----------------------------------------------------------
+  netbox-redis:
+    image: valkey/valkey:8-alpine
+    container_name: netbox-redis
+    env_file:
+      - ../../.env
+      - .env
+    command: valkey-server --requirepass ${NETBOX_REDIS_PASSWORD}
+    volumes:
+      - ${DOCKER_DATA_PATH}/netbox/redis:/data
+    networks:
+      - netbox-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "${NETBOX_REDIS_PASSWORD}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # -----------------------------------------------------------
+  # NetBox — Main application server
+  # Uses custom image with netbox_unifi_sync plugin installed
+  # -----------------------------------------------------------
+  netbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NETBOX_VERSION: v4.5
+    image: eirdom/netbox:v4.5
+    container_name: netbox
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      NETBOX_DB_NAME: ${NETBOX_DB_NAME}
+      NETBOX_DB_USER: ${NETBOX_DB_USER}
+      NETBOX_DB_PASSWORD: ${NETBOX_DB_PASSWORD}
+      NETBOX_REDIS_PASSWORD: ${NETBOX_REDIS_PASSWORD}
+      NETBOX_SECRET_KEY: ${NETBOX_SECRET_KEY}
+      NETBOX_ALLOWED_HOST: netbox.${ROOT_DOMAIN}
+      LDAP_SERVER: ldap://10.1.10.10
+      LDAP_BIND_DN: ${NETBOX_LDAP_BIND_DN}
+      LDAP_BIND_PASSWORD: ${NETBOX_LDAP_BIND_PASSWORD}
+      # Pass SMTP vars from root .env
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+      TZ: ${TZ}
+    volumes:
+      # Custom configuration
+      - ./configuration.py:/etc/netbox/config/configuration.py:ro
+      # Persistent media (device images, attachments)
+      - ${DOCKER_DATA_PATH}/netbox/media:/opt/netbox/netbox/media
+      # Reports and scripts
+      - ${DOCKER_DATA_PATH}/netbox/reports:/opt/netbox/netbox/reports
+      - ${DOCKER_DATA_PATH}/netbox/scripts:/opt/netbox/netbox/scripts
+    networks:
+      - proxy
+      - netbox-internal
+    depends_on:
+      netbox-postgres:
+        condition: service_healthy
+      netbox-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.netbox.rule=Host(`netbox.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.netbox.entrypoints=websecure"
+      - "traefik.http.routers.netbox.tls=true"
+      - "traefik.http.routers.netbox.tls.certresolver=cloudflare"
+      - "traefik.http.services.netbox.loadbalancer.server.port=8080"
+      # chain-public — NetBox handles own auth via AD LDAP
+      # No Authentik ForwardAuth
+      - "traefik.http.routers.netbox.middlewares=chain-public@file"
+      - "traefik.docker.network=proxy"
+
+  # -----------------------------------------------------------
+  # NetBox Worker — handles background jobs including
+  # netbox_unifi_sync scheduled sync tasks
+  # Must use the SAME custom image as the netbox container
+  # -----------------------------------------------------------
+  netbox-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NETBOX_VERSION: v4.5
+    image: eirdom/netbox:v4.5
+    container_name: netbox-worker
+    command: /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py rqworker
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      NETBOX_DB_NAME: ${NETBOX_DB_NAME}
+      NETBOX_DB_USER: ${NETBOX_DB_USER}
+      NETBOX_DB_PASSWORD: ${NETBOX_DB_PASSWORD}
+      NETBOX_REDIS_PASSWORD: ${NETBOX_REDIS_PASSWORD}
+      NETBOX_SECRET_KEY: ${NETBOX_SECRET_KEY}
+      LDAP_SERVER: ldap://10.1.10.10
+      LDAP_BIND_DN: ${NETBOX_LDAP_BIND_DN}
+      LDAP_BIND_PASSWORD: ${NETBOX_LDAP_BIND_PASSWORD}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL}
+      TZ: ${TZ}
+    volumes:
+      - ./configuration.py:/etc/netbox/config/configuration.py:ro
+      - ${DOCKER_DATA_PATH}/netbox/media:/opt/netbox/netbox/media
+      - ${DOCKER_DATA_PATH}/netbox/reports:/opt/netbox/netbox/reports
+      - ${DOCKER_DATA_PATH}/netbox/scripts:/opt/netbox/netbox/scripts
+    networks:
+      - netbox-internal
+    depends_on:
+      netbox:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # -----------------------------------------------------------
+  # NetBox Housekeeping — runs daily maintenance tasks
+  # Cleans expired sessions, old changelogs, etc.
+  # -----------------------------------------------------------
+  netbox-housekeeping:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NETBOX_VERSION: v4.5
+    image: eirdom/netbox:v4.5
+    container_name: netbox-housekeeping
+    command: /opt/netbox/housekeeping.sh
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      NETBOX_DB_NAME: ${NETBOX_DB_NAME}
+      NETBOX_DB_USER: ${NETBOX_DB_USER}
+      NETBOX_DB_PASSWORD: ${NETBOX_DB_PASSWORD}
+      NETBOX_REDIS_PASSWORD: ${NETBOX_REDIS_PASSWORD}
+      NETBOX_SECRET_KEY: ${NETBOX_SECRET_KEY}
+      TZ: ${TZ}
+    volumes:
+      - ./configuration.py:/etc/netbox/config/configuration.py:ro
+      - ${DOCKER_DATA_PATH}/netbox/media:/opt/netbox/netbox/media
+    networks:
+      - netbox-internal
+    depends_on:
+      netbox:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  proxy:
+    external: true
+  netbox-internal:
+    driver: bridge
+    internal: true

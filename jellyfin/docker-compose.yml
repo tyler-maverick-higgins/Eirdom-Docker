@@ -1,0 +1,165 @@
+# =============================================================
+# Eirdom — Jellyfin Stack
+# Services: Jellyfin, Jellyseerr, Jellystat, Jellystat DB
+#
+# Authentication:
+#   Jellyfin  — AD LDAP via EIRDOM-DC-01 (LDAP plugin)
+#   Jellyseerr — Jellyfin account SSO (uses Jellyfin auth)
+#   Jellystat  — Jellyfin API key (no user login needed)
+#
+# Transcoding: DISABLED — CPU-only server, direct play only
+# Hardware: Intel Xeon X3430 — no Quick Sync, no VAAPI
+#
+# Storage: ${MEDIA_PATH} (/media/arr) mounted as /data
+# Same filesystem as ARR stack = consistent paths
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # Jellyfin — Media server
+  # AD authentication via LDAP plugin
+  # Direct play only — no transcoding configured
+  # Libraries map to existing ARR stack media folders
+  # -----------------------------------------------------------
+  jellyfin:
+    image: lscr.io/linuxserver/jellyfin:latest
+    container_name: jellyfin
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      PUID: ${PUID}
+      PGID: ${PGID}
+      TZ: ${TZ}
+      # JELLYFIN_PublishedServerUrl is optional but helps with
+      # external access URLs shown to clients
+      JELLYFIN_PublishedServerUrl: https://jellyfin.${ROOT_DOMAIN}
+    volumes:
+      - ${DOCKER_DATA_PATH}/jellyfin:/config
+      - ${DOCKER_DATA_PATH}/jellyfin/certs:/certs:ro
+      - ${MEDIA_PATH}:/data
+    networks:
+      - proxy
+      - jellyfin-internal
+    restart: unless-stopped
+    # No hardware transcoding devices — CPU-only server
+    # If hardware is upgraded in future, add:
+    # devices:
+    #   - /dev/dri/renderD128:/dev/dri/renderD128
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jellyfin.rule=Host(`jellyfin.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.jellyfin.entrypoints=websecure"
+      - "traefik.http.routers.jellyfin.tls=true"
+      - "traefik.http.routers.jellyfin.tls.certresolver=cloudflare"
+      - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
+      # chain-public — Jellyfin handles its own AD LDAP auth
+      # No Authentik ForwardAuth
+      - "traefik.http.routers.jellyfin.middlewares=chain-public@file"
+      - "traefik.docker.network=proxy"
+
+  # -----------------------------------------------------------
+  # Jellyseerr — Media request management
+  # Users log in with their Jellyfin credentials
+  # Connects to Radarr (HD+4K) and Sonarr (HD+4K)
+  # -----------------------------------------------------------
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      TZ: ${TZ}
+      LOG_LEVEL: info
+    volumes:
+      - ${DOCKER_DATA_PATH}/jellyseerr:/app/config
+    networks:
+      - proxy
+      - jellyfin-internal
+    depends_on:
+      - jellyfin
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jellyseerr.rule=Host(`requests.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.jellyseerr.entrypoints=websecure"
+      - "traefik.http.routers.jellyseerr.tls=true"
+      - "traefik.http.routers.jellyseerr.tls.certresolver=cloudflare"
+      - "traefik.http.services.jellyseerr.loadbalancer.server.port=5055"
+      # chain-public — Jellyseerr authenticates via Jellyfin accounts
+      # No Authentik ForwardAuth
+      - "traefik.http.routers.jellyseerr.middlewares=chain-public@file"
+      - "traefik.docker.network=proxy"
+
+  # -----------------------------------------------------------
+  # Jellystat DB — PostgreSQL for Jellystat
+  # Isolated on jellyfin-internal network
+  # -----------------------------------------------------------
+  jellystat-db:
+    image: postgres:15-alpine
+    container_name: jellystat-db
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      POSTGRES_DB: ${JELLYSTAT_DB_NAME}
+      POSTGRES_USER: ${JELLYSTAT_DB_USER}
+      POSTGRES_PASSWORD: ${JELLYSTAT_DB_PASSWORD}
+    volumes:
+      - ${DOCKER_DATA_PATH}/jellystat/db:/var/lib/postgresql/data
+    networks:
+      - jellyfin-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${JELLYSTAT_DB_USER} -d ${JELLYSTAT_DB_NAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # -----------------------------------------------------------
+  # Jellystat — Jellyfin statistics and analytics
+  # No user login — authenticates via Jellyfin API key
+  # Internal admin tool — chain-admin middleware
+  # -----------------------------------------------------------
+  jellystat:
+    image: cyfershepard/jellystat:latest
+    container_name: jellystat
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      POSTGRES_USER: ${JELLYSTAT_DB_USER}
+      POSTGRES_PASSWORD: ${JELLYSTAT_DB_PASSWORD}
+      POSTGRES_IP: jellystat-db
+      POSTGRES_PORT: 5432
+      JWT_SECRET: ${JELLYSTAT_JWT_SECRET}
+      TZ: ${TZ}
+    volumes:
+      - ${DOCKER_DATA_PATH}/jellystat/backup-data:/app/backend/backup-data
+    networks:
+      - proxy
+      - jellyfin-internal
+    depends_on:
+      jellystat-db:
+        condition: service_healthy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.jellystat.rule=Host(`jellystat.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.jellystat.entrypoints=websecure"
+      - "traefik.http.routers.jellystat.tls=true"
+      - "traefik.http.routers.jellystat.tls.certresolver=cloudflare"
+      - "traefik.http.services.jellystat.loadbalancer.server.port=3000"
+      # chain-admin — admin-only tool, VLAN 10 whitelist + Authentik
+      - "traefik.http.routers.jellystat.middlewares=chain-admin@file"
+      - "traefik.docker.network=proxy"
+
+networks:
+  proxy:
+    external: true
+  jellyfin-internal:
+    driver: bridge
+    internal: true

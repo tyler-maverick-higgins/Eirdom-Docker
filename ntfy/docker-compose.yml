@@ -1,0 +1,64 @@
+# =============================================================
+# Eirdom — Ntfy
+# Self-hosted push notification server
+#
+# Authentication: ntfy's own deny-all + token auth (chain-public)
+#   NOT Authentik ForwardAuth — see middleware note below
+# Storage: SQLite — single volume mount
+#
+# Used by: Uptime Kuma, Wazuh, backup.sh, and any other
+# service that needs to push alerts to phones
+#
+# Mobile apps: ntfy (iOS + Android)
+#   Server URL: https://ntfy.eirdom.homes
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # Ntfy — Push notification server
+  # Lightweight, SQLite-backed, no external dependencies
+  # Subscribe to topics from the mobile app and any service
+  # can publish to those topics via HTTP POST
+  # -----------------------------------------------------------
+  ntfy:
+    image: binwiederhier/ntfy:latest
+    container_name: ntfy
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      TZ: ${TZ}
+      # Cache notifications for 12 hours so missed alerts
+      # are delivered when a device comes back online
+      NTFY_CACHE_DURATION: 12h
+      NTFY_CACHE_FILE: /var/cache/ntfy/cache.db
+      NTFY_AUTH_FILE: /var/cache/ntfy/auth.db
+      # Require authentication to publish and subscribe
+      # Prevents anyone on the network publishing to your topics
+      NTFY_AUTH_DEFAULT_ACCESS: deny-all
+      NTFY_BASE_URL: https://ntfy.${ROOT_DOMAIN}
+      NTFY_BEHIND_PROXY: "true"
+    command: serve
+    volumes:
+      - ${DOCKER_DATA_PATH}/ntfy:/var/cache/ntfy
+    networks:
+      - proxy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ntfy.rule=Host(`ntfy.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.ntfy.entrypoints=websecure"
+      - "traefik.http.routers.ntfy.tls=true"
+      - "traefik.http.routers.ntfy.tls.certresolver=cloudflare"
+      - "traefik.http.services.ntfy.loadbalancer.server.port=80"
+      # chain-public — ntfy enforces its own deny-all + token auth.
+      # NOT chain-standard: Authentik ForwardAuth would block the
+      # mobile app and token publishers (Uptime Kuma, Wazuh,
+      # backup.sh), none of which can complete the browser SSO flow.
+      - "traefik.http.routers.ntfy.middlewares=chain-public@file"
+      - "traefik.docker.network=proxy"
+
+networks:
+  proxy:
+    external: true

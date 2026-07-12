@@ -1,0 +1,132 @@
+# =============================================================
+# Eirdom — Webserver Stack
+# Services: WordPress, MariaDB, Adminer
+# All traffic routed through Traefik (proxy network)
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # MariaDB — WordPress Database
+  # Isolated on wordpress-internal network only.
+  # Not reachable from Traefik or any other service outside
+  # this stack.
+  # -----------------------------------------------------------
+  mariadb:
+    image: mariadb:11
+    container_name: mariadb
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      MYSQL_ROOT_PASSWORD: ${WP_DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${WP_DB_NAME}
+      MYSQL_USER: ${WP_DB_USER}
+      MYSQL_PASSWORD: ${WP_DB_PASSWORD}
+    volumes:
+      - ${DOCKER_DATA_PATH}/wordpress/db:/var/lib/mysql
+    networks:
+      - wordpress-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # -----------------------------------------------------------
+  # WordPress — Family Website
+  # Sits on both proxy (Traefik routing) and
+  # wordpress-internal (MariaDB access) networks.
+  # Depends on MariaDB being healthy before starting.
+  # -----------------------------------------------------------
+  wordpress:
+    # Apache variant — serves HTTP on :80, which is what the Traefik
+    # label below routes to. The -fpm image speaks FastCGI on :9000 and
+    # has no HTTP server, so Traefik could not reach it. Same /var/www/html
+    # volume, same DB env — drop-in for the existing install.
+    image: wordpress:php8.3-apache
+    container_name: wordpress
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      WORDPRESS_DB_HOST: mariadb:3306
+      WORDPRESS_DB_NAME: ${WP_DB_NAME}
+      WORDPRESS_DB_USER: ${WP_DB_USER}
+      WORDPRESS_DB_PASSWORD: ${WP_DB_PASSWORD}
+      WORDPRESS_TABLE_PREFIX: ${WP_TABLE_PREFIX}
+      WORDPRESS_DEBUG: "false"
+    volumes:
+      - ${DOCKER_DATA_PATH}/wordpress/html:/var/www/html
+    networks:
+      - proxy
+      - wordpress-internal
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      # --- main router: all paths ---
+      - "traefik.http.routers.wordpress.rule=Host(`${ROOT_DOMAIN}`) || Host(`www.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.wordpress.entrypoints=websecure"
+      - "traefik.http.routers.wordpress.tls=true"
+      - "traefik.http.routers.wordpress.tls.certresolver=cloudflare"
+      - "traefik.http.routers.wordpress.middlewares=chain-wordpress@file"
+      - "traefik.http.services.wordpress.loadbalancer.server.port=80"
+      # --- login router: strict limiter, higher priority ---
+      - "traefik.http.routers.wordpress-login.rule=(Host(`${ROOT_DOMAIN}`) || Host(`www.${ROOT_DOMAIN}`)) && (Path(`/wp-login.php`) || Path(`/xmlrpc.php`))"
+      - "traefik.http.routers.wordpress-login.entrypoints=websecure"
+      - "traefik.http.routers.wordpress-login.tls=true"
+      - "traefik.http.routers.wordpress-login.tls.certresolver=cloudflare"
+      - "traefik.http.routers.wordpress-login.priority=100"
+      - "traefik.http.routers.wordpress-login.service=wordpress"
+      - "traefik.http.routers.wordpress-login.middlewares=chain-wordpress-login@file"
+
+  # -----------------------------------------------------------
+  # Adminer — Database Management UI
+  # Internal access only — NOT exposed externally via Cloudflare.
+  # Accessible at https://adminer.eirdom.homes from VLAN 10 only.
+  # Restricted to obj_my_device via firewall (lan-rules.md).
+  # -----------------------------------------------------------
+  adminer:
+    image: adminer:latest
+    container_name: adminer
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      ADMINER_DEFAULT_SERVER: mariadb
+      ADMINER_DESIGN: pepa-linha-dark
+    networks:
+      - proxy
+      - wordpress-internal
+    depends_on:
+      - mariadb
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.adminer.rule=Host(`adminer.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.adminer.entrypoints=websecure"
+      - "traefik.http.routers.adminer.tls=true"
+      - "traefik.http.routers.adminer.tls.certresolver=cloudflare"
+      - "traefik.http.services.adminer.loadbalancer.server.port=8080"
+      # IP allowlist — restrict to VLAN 10 subnet only
+      # Renamed from ipwhitelist — Traefik v3 renamed the middleware to
+      # ipAllowList; the old key no longer loads (would fail open).
+      - "traefik.http.middlewares.adminer-ipallowlist.ipallowlist.sourcerange=10.1.10.0/24"
+      - "traefik.http.routers.adminer.middlewares=adminer-ipallowlist"
+
+# -----------------------------------------------------------
+# Networks
+# proxy        — shared with Traefik (external: true)
+# wordpress-internal — isolated database network
+# -----------------------------------------------------------
+networks:
+  proxy:
+    external: true
+  wordpress-internal:
+    driver: bridge
+    internal: true

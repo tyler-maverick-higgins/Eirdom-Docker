@@ -1,0 +1,41 @@
+services:
+  radicale:
+    image: tomsquest/docker-radicale:3.5.4.0   # verify current tag on Docker Hub — past my cutoff; pin per M4
+    container_name: radicale
+    env_file:
+      - ../../.env
+      - .env
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - KILL
+      - SETGID
+      - SETUID
+    tmpfs:
+      - /tmp
+    volumes:
+      - ${DOCKER_DATA_PATH}/radicale/data:/data
+      - ${DOCKER_DATA_PATH}/radicale/config:/config:ro
+    networks:
+      - proxy
+    restart: unless-stopped
+    # (image ships its own HEALTHCHECK)
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.radicale.rule=Host(`calendar.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.radicale.entrypoints=websecure"
+      - "traefik.http.routers.radicale.tls=true"
+      - "traefik.http.routers.radicale.tls.certresolver=cloudflare"
+      - "traefik.http.services.radicale.loadbalancer.server.port=5232"
+      # chain-public — Radicale self-auths; native CalDAV clients can't do ForwardAuth
+      # (same reasoning as Jellyfin / Home Assistant)
+      - "traefik.http.routers.radicale.middlewares=chain-public@file"
+      - "traefik.docker.network=proxy"
+
+networks:
+  proxy:
+    external: true

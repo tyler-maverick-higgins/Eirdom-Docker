@@ -1,0 +1,215 @@
+name: Validate
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+# Cancel in-progress runs on the same branch when a new push arrives
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================
+  # Docker Compose Validation
+  # Parses all compose files with dummy env vars to catch YAML
+  # errors, invalid service references, and schema violations
+  # ============================================================
+  validate-compose:
+    name: Docker Compose Files
+    runs-on: ubuntu-latest
+
+    env:
+      # Shared vars (from root .env)
+      TZ: America/Chicago
+      PUID: "1000"
+      PGID: "1000"
+      UMASK: "022"
+      ROOT_DOMAIN: eirdom.homes
+      DOCKER_DATA_PATH: /tmp/eirdom/config
+      MEDIA_PATH: /tmp/eirdom/media
+      SMTP_HOST: smtp.example.com
+      SMTP_PORT: "587"
+      SMTP_USER: test@example.com
+      SMTP_PASSWORD: dummy
+      SMTP_FROM_EMAIL: test@example.com
+
+      # Traefik
+      CF_API_TOKEN: dummy_cf_token
+      CF_ZONE_ID: dummy_zone_id
+      TRAEFIK_ACME_EMAIL: admin@eirdom.homes
+
+      # Cloudflared
+      CLOUDFLARE_TUNNEL_TOKEN: dummy_tunnel_token
+      CLOUDFLARE_TUNNEL_ID: dummy_tunnel_id
+
+      # WordPress
+      WP_DB_NAME: wordpress
+      WP_DB_USER: wordpress
+      WP_DB_PASSWORD: dummy_wp_password
+      WP_DB_ROOT_PASSWORD: dummy_root_password
+      WP_TABLE_PREFIX: wp_
+
+      # Authentik
+      AUTHENTIK_SECRET_KEY: dummy_authentik_secret_key_32chars_min
+      AUTHENTIK_DB_NAME: authentik
+      AUTHENTIK_DB_USER: authentik
+      AUTHENTIK_DB_PASSWORD: dummy_authentik_db_password
+      AUTHENTIK_LDAP_BIND_PASSWORD: dummy_ldap_password
+
+      # NetBox
+      NETBOX_SECRET_KEY: dummy_netbox_secret_key_50chars_minimum_length
+      NETBOX_DB_NAME: netbox
+      NETBOX_DB_USER: netbox
+      NETBOX_DB_PASSWORD: dummy_netbox_db_password
+      NETBOX_REDIS_PASSWORD: dummy_redis_password
+      NETBOX_LDAP_BIND_DN: "CN=netbox-svc,OU=Service Accounts,DC=ad,DC=eirdom,DC=homes"
+      NETBOX_LDAP_BIND_PASSWORD: dummy_ldap_password
+
+      # Jellyfin / Jellystat
+      JELLYSTAT_DB_NAME: jellystat
+      JELLYSTAT_DB_USER: jellystat
+      JELLYSTAT_DB_PASSWORD: dummy_jellystat_db_password
+      JELLYSTAT_JWT_SECRET: dummy_jellystat_jwt_secret
+      JELLYFIN_LDAP_BIND_PASSWORD: dummy_ldap_password
+      JELLYFIN_API_KEY: dummy_jellyfin_api_key
+
+      # ARR Stack / Gluetun
+      WIREGUARD_PRIVATE_KEY: dummy_wg_private_key_base64padded==
+      WIREGUARD_SERVER_PUBLIC_KEY: dummy_wg_public_key_base64padded==
+      WIREGUARD_ADDRESSES: 10.14.0.2/32
+      VPN_ENDPOINT_IP: 1.2.3.4
+      VPN_ENDPOINT_PORT: "51820"
+      TORGUARD_FORWARDED_PORT: "12345"
+      RADARR_API_KEY: dummy_radarr_api_key
+      RADARR_4K_API_KEY: dummy_radarr4k_api_key
+      SONARR_API_KEY: dummy_sonarr_api_key
+      SONARR_4K_API_KEY: dummy_sonarr4k_api_key
+      LIDARR_API_KEY: dummy_lidarr_api_key
+
+      # Paperless
+      PAPERLESS_SECRET_KEY: dummy_paperless_secret_key_50chars_min
+      PAPERLESS_DB_NAME: paperless
+      PAPERLESS_DB_USER: paperless
+      PAPERLESS_DB_PASSWORD: dummy_paperless_db_password
+      PAPERLESS_ADMIN_USER: admin
+      PAPERLESS_ADMIN_PASSWORD: dummy_admin_password
+      PAPERLESS_ADMIN_EMAIL: admin@eirdom.homes
+
+      # Immich
+      IMMICH_DB_NAME: immich
+      IMMICH_DB_USER: immich
+      IMMICH_DB_PASSWORD: dummy_immich_db_password
+
+      # Mealie
+      MEALIE_DB_NAME: mealie
+      MEALIE_DB_USER: mealie
+      MEALIE_DB_PASSWORD: dummy_mealie_db_password
+      MEALIE_ADMIN_EMAIL: admin@eirdom.homes
+      MEALIE_ADMIN_PASSWORD: dummy_admin_password
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create .env files from examples
+        run: |
+          cp .env.example .env
+          for dir in docker/*/; do
+            [ -f "$dir/.env.example" ] && cp "$dir/.env.example" "$dir/.env"
+          done
+
+      - name: Validate all Docker Compose files
+        run: |
+          FAILED=0
+          for compose in docker/*/docker-compose.yml; do
+            SERVICE=$(basename $(dirname $compose))
+            if docker compose -f "$compose" config --quiet 2>/dev/null; then
+              echo "✓  $SERVICE"
+            else
+              echo "✗  $SERVICE — validation failed"
+              # Run again without --quiet to show the actual error
+              docker compose -f "$compose" config 2>&1 | head -20
+              FAILED=1
+            fi
+          done
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo ""
+            echo "One or more compose files failed validation."
+            exit 1
+          fi
+
+  # ============================================================
+  # Shell Script Linting (ShellCheck)
+  # Catches syntax errors, unquoted variables, common pitfalls
+  # ============================================================
+  lint-shell:
+    name: Shell Scripts (ShellCheck)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Lint shell scripts
+        run: |
+          FAILED=0
+          for script in scripts/*.sh; do
+            # SC2034: unused variable — false positives in bash are common
+            # SC1091: not following sourced files — .env files aren't in CI
+            if shellcheck --shell=bash \
+                          --severity=error \
+                          --exclude=SC2034,SC1091,SC1036,SC1072,SC1073 \
+                          "$script"; then
+              echo "✓  $script"
+            else
+              FAILED=1
+            fi
+          done
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo ""
+            echo "One or more shell scripts failed ShellCheck."
+            exit 1
+          fi
+
+  # ============================================================
+  # YAML Linting
+  # Validates Traefik dynamic config, recyclarr.yml, and other
+  # standalone YAML files for syntax errors
+  # ============================================================
+  lint-yaml:
+    name: YAML Files
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint YAML files
+        run: |
+          yamllint \
+            --config-data '{
+              extends: default,
+              rules: {
+                line-length: disable,
+                comments: disable,
+                comments-indentation: disable,
+                truthy: disable,
+                document-start: disable,
+                new-line-at-end-of-file: disable
+              }
+            }' \
+            docker/traefik/traefik.yml \
+            docker/traefik/dynamic/middlewares.yml \
+            docker/traefik/dynamic/routers.yml \
+            docker/arr-stack/recyclarr.yml

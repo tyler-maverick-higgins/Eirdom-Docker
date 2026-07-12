@@ -1,0 +1,53 @@
+# =============================================================
+# Eirdom — Traefik v3.3
+# Reverse proxy, TLS termination, ForwardAuth via Authentik
+# Must start before all other services
+# =============================================================
+
+services:
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      # Cloudflare DNS challenge credentials
+      # Used by Traefik to create/delete TXT records for Let's Encrypt
+      CF_DNS_API_TOKEN: ${CF_API_TOKEN}
+      CF_ZONE_ID: ${CF_ZONE_ID}
+      # Pass domain vars to traefik.yml substitution
+      ROOT_DOMAIN: ${ROOT_DOMAIN}
+      TRAEFIK_ACME_EMAIL: ${TRAEFIK_ACME_EMAIL}
+      # DOCKER_API_VERSION: ${DOCKER_API_VERSION}
+    ports:
+      # Bind to 0.0.0.0 — Traefik is the only container that
+      # should be directly reachable from the network
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    volumes:
+      # Docker socket — read-only for security
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Static config
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      # Dynamic config directory
+      - ./dynamic:/etc/traefik/dynamic:ro
+      # TLS certificate storage — must be chmod 600
+      - ${DOCKER_DATA_PATH}/traefik/certs:/certs
+      # Access and error logs for Wazuh ingestion
+      - ${DOCKER_DATA_PATH}/traefik/logs:/logs
+    networks:
+      - proxy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+networks:
+  proxy:
+    external: true

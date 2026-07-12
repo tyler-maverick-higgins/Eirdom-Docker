@@ -1,0 +1,51 @@
+# =============================================================
+# Eirdom — Homebox
+# Home inventory management — appliances, tools, warranties
+#
+# Authentication: Authentik ForwardAuth (chain-standard)
+# Storage: SQLite — single volume mount, no DB container needed
+#
+# Use case: Track every appliance, tool, and item in the home
+# with purchase dates, serial numbers, warranty periods,
+# and linked documents (pairs with Paperless-ngx)
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # Homebox — Home inventory and asset management
+  # SQLite-backed, single container, no external dependencies
+  # -----------------------------------------------------------
+  homebox:
+    image: ghcr.io/sysadminsmedia/homebox:latest
+    container_name: homebox
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      TZ: ${TZ}
+      HBOX_LOG_LEVEL: info
+      HBOX_LOG_FORMAT: text
+      # Storage path inside container
+      HBOX_STORAGE_DATA: /data/
+      # Set base URL for correct link generation
+      HBOX_WEB_MAX_UPLOAD_SIZE: 10
+    volumes:
+      - ${DOCKER_DATA_PATH}/homebox:/data
+    networks:
+      - proxy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.homebox.rule=Host(`homebox.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.homebox.entrypoints=websecure"
+      - "traefik.http.routers.homebox.tls=true"
+      - "traefik.http.routers.homebox.tls.certresolver=cloudflare"
+      - "traefik.http.services.homebox.loadbalancer.server.port=7745"
+      # chain-standard — Authentik SSO
+      - "traefik.http.routers.homebox.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+networks:
+  proxy:
+    external: true

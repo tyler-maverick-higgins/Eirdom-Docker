@@ -1,0 +1,162 @@
+# =============================================================
+# Eirdom — Immich
+# Self-hosted photo and video backup — private Google Photos
+#
+# Authentication: Immich handles its own auth (email + password)
+#   Uses chain-public — no Authentik ForwardAuth
+#   Reason: Immich mobile apps do not support ForwardAuth SSO
+#   Family members create Immich accounts directly
+#
+# Dependencies: PostgreSQL with VectorChord (face/object recognition)
+#               Redis (task queue)
+#               Immich ML (AI features — face recognition, CLIP search)
+#
+# Storage (single consolidated mount): ${MEDIA_PATH}/immich -> /usr/src/app/upload
+#   subdirs Immich manages: library/ upload/ thumbs/ profile/ encoded-video/
+#
+# Mobile apps: Immich (iOS + Android)
+#   Server URL: https://photos.eirdom.homes
+#
+# ------------------------------------------------------------
+# ONE-TIME MIGRATION (do in this order — BACK UP FIRST):
+#   1. Set IMMICH_VERSION in .env to a specific current release — no
+#      more :release. Versions: github.com/immich-app/immich/releases
+#   2. Back up the database:
+#        docker exec -t immich-db pg_dumpall -U ${IMMICH_DB_USER} \
+#          | gzip > immich-db-backup.sql.gz
+#   3. Rename the video dir to match the consolidated layout:
+#        mv /media/arr/immich/video /media/arr/immich/encoded-video
+#   4. docker compose up -d. On first start Immich migrates pgvecto.rs
+#      -> VectorChord; logs may sit on "Reindexing clip_index /
+#      face_index" for a while on a large library — let it finish.
+# ------------------------------------------------------------
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # PostgreSQL — Immich database with VectorChord extension
+  # Required for ML vector search (face recognition, CLIP)
+  # The immich-app/postgres image bundles VectorChord + pgvecto.rs +
+  # pgvector, so it reads existing pgvecto.rs data and migrates it.
+  # -----------------------------------------------------------
+  immich-db:
+    # Verify the exact tag for your pinned Immich version against the
+    # official compose at github.com/immich-app/immich. This one matches
+    # your current pg16 + pgvecto.rs 0.2.0 data so it can read & migrate it.
+    image: ghcr.io/immich-app/postgres:16-vectorchord0.3.0-pgvectors0.2.0
+    container_name: immich-db
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      POSTGRES_DB: ${IMMICH_DB_NAME}
+      POSTGRES_USER: ${IMMICH_DB_USER}
+      POSTGRES_PASSWORD: ${IMMICH_DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - ${DOCKER_DATA_PATH}/immich/db:/var/lib/postgresql/data
+    networks:
+      - immich-internal
+    restart: unless-stopped
+    # Custom command removed: this image sets shared_preload_libraries
+    # (vchord.so, vectors.so) and sensible tuning internally. To re-add
+    # Postgres tuning, KEEP both preload libraries, e.g.:
+    #   shm_size: 256m
+    #   command: >-
+    #     postgres
+    #     -c shared_preload_libraries=vchord.so,vectors.so
+    #     -c max_wal_size=2GB -c shared_buffers=512MB -c wal_compression=lz4
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${IMMICH_DB_USER} -d ${IMMICH_DB_NAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # -----------------------------------------------------------
+  # Redis — Immich job queue
+  # -----------------------------------------------------------
+  immich-redis:
+    image: valkey/valkey:8-alpine
+    container_name: immich-redis
+    networks:
+      - immich-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # -----------------------------------------------------------
+  # Immich Machine Learning — Face recognition and CLIP search
+  # CPU-only — no GPU on EIRDOM-DOCKER-01
+  # First run downloads ML models (~1GB) — allow time for startup
+  # -----------------------------------------------------------
+  immich-machine-learning:
+    image: ghcr.io/immich-app/immich-machine-learning:${IMMICH_VERSION}
+    container_name: immich-machine-learning
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      # CPU-only inference — no GPU acceleration available
+      MACHINE_LEARNING_WORKERS: 1
+    volumes:
+      - ${DOCKER_DATA_PATH}/immich/ml-cache:/cache
+    networks:
+      - immich-internal
+    restart: unless-stopped
+
+  # -----------------------------------------------------------
+  # Immich Server — Main application
+  # Handles API, background jobs, and web UI
+  # -----------------------------------------------------------
+  immich-server:
+    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION}
+    container_name: immich-server
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      DB_HOSTNAME: immich-db
+      DB_DATABASE_NAME: ${IMMICH_DB_NAME}
+      DB_USERNAME: ${IMMICH_DB_USER}
+      DB_PASSWORD: ${IMMICH_DB_PASSWORD}
+      REDIS_HOSTNAME: immich-redis
+      TZ: ${TZ}
+    volumes:
+      # Single consolidated mount (current Immich layout). Immich keeps
+      # library/ upload/ thumbs/ profile/ encoded-video/ as subdirs here.
+      # MIGRATION: your existing dirs map 1:1 EXCEPT video -> encoded-video
+      # (see the rename step in the header).
+      - ${MEDIA_PATH}/immich:/usr/src/app/upload
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - proxy
+      - immich-internal
+    depends_on:
+      immich-db:
+        condition: service_healthy
+      immich-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.immich.rule=Host(`photos.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.immich.entrypoints=websecure"
+      - "traefik.http.routers.immich.tls=true"
+      - "traefik.http.routers.immich.tls.certresolver=cloudflare"
+      - "traefik.http.services.immich.loadbalancer.server.port=2283"
+      # chain-app — Immich OIDC handles auth with Authentik
+      # Mobile apps cannot use Authentik ForwardAuth
+      - "traefik.http.routers.immich.middlewares=chain-app@file"
+      - "traefik.docker.network=proxy"
+
+networks:
+  proxy:
+    external: true
+  immich-internal:
+    driver: bridge
+    internal: true

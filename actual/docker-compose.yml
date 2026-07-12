@@ -1,0 +1,55 @@
+# =============================================================
+# Eirdom — Actual Budget
+# Local-first personal finance and budgeting
+#
+# Authentication: Actual Budget handles its own auth
+#   Uses chain-public — financial data should not be
+#   auto-logged in via Authentik header passthrough
+#   Users set a server password on first access
+#
+# Storage: SQLite — single volume mount, no DB container needed
+#
+# Use cases:
+#   - Zero-based budgeting
+#   - Track spending across accounts
+#   - Home build and renovation budget tracking
+#   - Monthly/annual financial reporting
+#
+# Mobile/desktop: Actual Budget app (iOS, Android, desktop)
+#   Server URL: https://actual.eirdom.homes
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # Actual Budget — Local-first budgeting application
+  # SQLite-backed, single container, no external dependencies
+  # All data stays on the server — no cloud sync
+  # -----------------------------------------------------------
+  actual:
+    image: actualbudget/actual-server:latest
+    container_name: actual
+    env_file:
+      - ../../.env
+      - .env
+    volumes:
+      - ${DOCKER_DATA_PATH}/actual:/data
+    networks:
+      - proxy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.actual.rule=Host(`actual.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.actual.entrypoints=websecure"
+      - "traefik.http.routers.actual.tls=true"
+      - "traefik.http.routers.actual.tls.certresolver=cloudflare"
+      - "traefik.http.services.actual.loadbalancer.server.port=5006"
+      # chain-public — Actual handles its own server password auth
+      # Financial data should not be auto-logged in via Authentik
+      # header passthrough — explicit login required every time
+      - "traefik.http.routers.actual.middlewares=chain-actual@file"
+      - "traefik.docker.network=proxy"
+
+networks:
+  proxy:
+    external: true

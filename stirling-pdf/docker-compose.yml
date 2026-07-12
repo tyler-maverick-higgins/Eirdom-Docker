@@ -1,0 +1,54 @@
+# =============================================================
+# Eirdom — Stirling PDF
+# Local PDF processing — merge, split, compress, OCR, convert
+# Replaces all online PDF tools (no data leaves the network)
+#
+# Authentication: Authentik ForwardAuth (chain-standard)
+# Storage: Stateless — no persistent data needed
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # Stirling PDF — PDF manipulation toolkit
+  # Fully stateless — no database, no persistent data
+  # All processing happens in-memory and files are not stored
+  # -----------------------------------------------------------
+  stirling-pdf:
+    image: frooodle/s-pdf:latest
+    container_name: stirling-pdf
+    env_file:
+      - ../../.env
+      - .env
+    environment:
+      DOCKER_ENABLE_SECURITY: "false"
+      # Authentik handles auth via chain-standard — no need
+      # for Stirling's built-in login system
+      SECURITY_ENABLE_LOGIN: "false"
+      SYSTEM_DEFAULTLOCALE: en-US
+      UI_APP_NAME: "Eirdom PDF"
+      # Allow large file uploads (default 50MB — increase for
+      # large PDFs like architectural plans)
+      SYSTEM_MAXFILESIZE: "100"
+    volumes:
+      - ${DOCKER_DATA_PATH}/stirling-pdf/configs:/configs
+      - ${DOCKER_DATA_PATH}/stirling-pdf/logs:/logs
+      # Uncomment to add custom fonts or training data for OCR
+      # - ${DOCKER_DATA_PATH}/stirling-pdf/tessdata:/usr/share/tesseract-ocr/5/tessdata
+    networks:
+      - proxy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.stirling-pdf.rule=Host(`pdf.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.stirling-pdf.entrypoints=websecure"
+      - "traefik.http.routers.stirling-pdf.tls=true"
+      - "traefik.http.routers.stirling-pdf.tls.certresolver=cloudflare"
+      - "traefik.http.services.stirling-pdf.loadbalancer.server.port=8080"
+      # chain-standard — Authentik SSO
+      - "traefik.http.routers.stirling-pdf.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+networks:
+  proxy:
+    external: true

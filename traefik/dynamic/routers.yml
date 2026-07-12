@@ -1,0 +1,138 @@
+# =============================================================
+# Traefik — Dynamic Configuration
+# routers.yml
+# Static routes for services not managed via Docker labels
+# (Traefik dashboard, Proxmox, Wazuh, Security Onion)
+# =============================================================
+# NOTE: ${VAR} is NOT expanded in file-provider configs (AUDIT C1),
+# so ROOT_DOMAIN is hardcoded to eirdom.homes below.
+
+http:
+  routers:
+
+    # -----------------------------------------------------------
+    # Traefik Dashboard
+    # Internal only — admin chain (Authentik + VLAN 10 whitelist)
+    # -----------------------------------------------------------
+    traefik-dashboard:
+      rule: "Host(`traefik.eirdom.homes`)"
+      entryPoints:
+        - websecure
+      service: api@internal
+      tls:
+        certResolver: cloudflare
+      middlewares:
+        - chain-admin
+
+    # -----------------------------------------------------------
+    # Proxmox Web UI
+    # Internal only — admin chain
+    # Proxmox uses self-signed cert — skip TLS verification
+    # -----------------------------------------------------------
+    proxmox:
+      rule: "Host(`proxmox.eirdom.homes`)"
+      entryPoints:
+        - websecure
+      service: proxmox-svc
+      tls:
+        certResolver: cloudflare
+      middlewares:
+        - chain-admin
+
+    # -----------------------------------------------------------
+    # Wazuh Dashboard
+    # Internal only — admin chain
+    # -----------------------------------------------------------
+    wazuh:
+      rule: "Host(`wazuh.eirdom.homes`)"
+      entryPoints:
+        - websecure
+      service: wazuh-svc
+      tls:
+        certResolver: cloudflare
+      middlewares:
+        - chain-admin
+
+    # -----------------------------------------------------------
+    # Security Onion
+    # Internal only — admin chain
+    # -----------------------------------------------------------
+    securityonion:
+      rule: "Host(`securityonion.eirdom.homes`)"
+      entryPoints:
+        - websecure
+      service: securityonion-svc
+      tls:
+        certResolver: cloudflare
+      middlewares:
+        - chain-admin
+
+    # -----------------------------------------------------------
+    # Home Assistant
+    # Internal only — public chain (HA handles its own auth)
+    # Mobile companion app cannot use Authentik ForwardAuth
+    # HAOS uses self-signed cert — skip TLS verification
+    # -----------------------------------------------------------
+    homeassistant:
+      rule: "Host(`homeassistant.eirdom.homes`)"
+      entryPoints:
+        - websecure
+      service: homeassistant-svc
+      tls:
+        certResolver: cloudflare
+      middlewares:
+        - chain-public
+
+  services:
+
+    # -----------------------------------------------------------
+    # Proxmox — self-signed cert, skip verify
+    # -----------------------------------------------------------
+    proxmox-svc:
+      loadBalancer:
+        servers:
+          - url: "https://10.1.10.5:8006"
+        serversTransport: proxmox-transport
+
+    # -----------------------------------------------------------
+    # Wazuh Dashboard
+    # Self-signed cert from all-in-one installer — skip verify
+    # Replace with internal PKI cert to use internal-transport
+    # -----------------------------------------------------------
+    wazuh-svc:
+      loadBalancer:
+        servers:
+          - url: "https://10.1.60.10:443"
+        serversTransport: proxmox-transport
+
+    # -----------------------------------------------------------
+    # Security Onion
+    # Self-signed cert from SO installer — skip verify
+    # -----------------------------------------------------------
+    securityonion-svc:
+      loadBalancer:
+        servers:
+          - url: "https://10.1.60.20:443"
+        serversTransport: proxmox-transport
+
+    # -----------------------------------------------------------
+    # Home Assistant OS
+    # Self-signed cert from HAOS — skip verify
+    # -----------------------------------------------------------
+    homeassistant-svc:
+      loadBalancer:
+        servers:
+          - url: "http://10.1.50.10:8123"
+
+  serversTransports:
+
+    # Used for: Proxmox, Wazuh, Security Onion
+    # All use self-signed certs from their own installers
+    # Skip verification — traffic never leaves the LAN
+    proxmox-transport:
+      insecureSkipVerify: true
+
+    # Reserved for future internal services issued a cert from
+    # EIRDOM-SUB-01 (Eirdom Issuing CA)
+    internal-transport:
+      insecureSkipVerify: false

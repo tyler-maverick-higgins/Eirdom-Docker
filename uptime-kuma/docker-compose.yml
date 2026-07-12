@@ -1,0 +1,45 @@
+# =============================================================
+# Eirdom — Uptime Kuma
+# Service monitoring and status dashboard
+#
+# Authentication: Authentik ForwardAuth (chain-standard)
+# Storage: SQLite — single volume mount, no DB container needed
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # Uptime Kuma — Service monitoring dashboard
+  # Monitors all Eirdom services and alerts on downtime
+  # SQLite database — simple single-container deployment
+  # -----------------------------------------------------------
+  uptime-kuma:
+    image: louislam/uptime-kuma:2.4.0
+    container_name: uptime-kuma
+    env_file:
+      - ../../.env
+      - .env
+    volumes:
+      - ${DOCKER_DATA_PATH}/uptime-kuma:/app/data
+      # Docker socket allows monitoring Docker container health
+      # Read-only — Uptime Kuma only reads container status
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - proxy
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.uptime-kuma.rule=Host(`status.${ROOT_DOMAIN}`)"
+      - "traefik.http.routers.uptime-kuma.entrypoints=websecure"
+      - "traefik.http.routers.uptime-kuma.tls=true"
+      - "traefik.http.routers.uptime-kuma.tls.certresolver=cloudflare"
+      - "traefik.http.services.uptime-kuma.loadbalancer.server.port=3001"
+      # chain-standard — Authentik SSO
+      # Uptime Kuma also has its own login but Authentik adds
+      # an outer layer so the login page is never exposed
+      - "traefik.http.routers.uptime-kuma.middlewares=chain-standard@file"
+      - "traefik.docker.network=proxy"
+
+networks:
+  proxy:
+    external: true
