@@ -15,7 +15,7 @@ services:
   # All processing happens in-memory and files are not stored
   # -----------------------------------------------------------
   stirling-pdf:
-    image: frooodle/s-pdf:latest
+    image: stirlingtools/stirling-pdf:alpha@sha256:218b8be693e8e276bb501b3ff0efd148ad054a67a2e7d6f6398925c7958b4139
     container_name: stirling-pdf
     env_file:
       - ../../.env

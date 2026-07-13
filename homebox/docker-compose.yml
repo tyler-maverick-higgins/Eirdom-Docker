@@ -17,7 +17,7 @@ services:
   # SQLite-backed, single container, no external dependencies
   # -----------------------------------------------------------
   homebox:
-    image: ghcr.io/sysadminsmedia/homebox:latest
+    image: ghcr.io/sysadminsmedia/homebox:v0.19.0
     container_name: homebox
     env_file:
       - ../../.env

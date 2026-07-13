@@ -13,7 +13,7 @@ services:
   # this stack.
   # -----------------------------------------------------------
   mariadb:
-    image: mariadb:11
+    image: mariadb:11@sha256:efb4959ef2c835cd735dbc388eb9ad6aab0c78dd64febcd51bc17481111890c4
     container_name: mariadb
     env_file:
       - ../../.env
@@ -46,7 +46,7 @@ services:
     # label below routes to. The -fpm image speaks FastCGI on :9000 and
     # has no HTTP server, so Traefik could not reach it. Same /var/www/html
     # volume, same DB env — drop-in for the existing install.
-    image: wordpress:php8.3-apache
+    image: wordpress:php8.3-apache@sha256:e36cd332ae0de78f3c3691e468c54c5540c0a74286b51eb9b5964fa1e9c916cd
     container_name: wordpress
     env_file:
       - ../../.env
@@ -92,7 +92,7 @@ services:
   # Restricted to obj_my_device via firewall (lan-rules.md).
   # -----------------------------------------------------------
   adminer:
-    image: adminer:latest
+    image: adminer:standalone@sha256:983261ecc40a4aaf11e25aeda8ef821f5a43a9f024b3967c81cbcc0e6ce43ba3
     container_name: adminer
     env_file:
       - ../../.env

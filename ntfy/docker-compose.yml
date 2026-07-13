@@ -22,7 +22,7 @@ services:
   # can publish to those topics via HTTP POST
   # -----------------------------------------------------------
   ntfy:
-    image: binwiederhier/ntfy:latest
+    image: binwiederhier/ntfy:v2.26@sha256:a6d335064ae927c4dbef118e1fa39656b3d2e01472b2a82af5915d5cebfe815f
     container_name: ntfy
     env_file:
       - ../../.env
