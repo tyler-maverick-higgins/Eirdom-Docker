@@ -25,6 +25,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       POSTGRES_DB: ${MEALIE_DB_NAME}
       POSTGRES_USER: ${MEALIE_DB_USER}
@@ -50,6 +55,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       PUID: ${PUID}
       PGID: ${PGID}

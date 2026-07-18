@@ -29,6 +29,11 @@ services:
   actual:
     image: actualbudget/actual-server:sha-0146471-alpine@sha256:50b4aa48f40643f86a358f4b5703a6d037c30e321703e58b10e9eab393798b55
     container_name: actual
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     env_file:
       - ../.env
       - .env

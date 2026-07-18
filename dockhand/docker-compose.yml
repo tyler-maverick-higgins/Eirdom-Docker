@@ -3,11 +3,14 @@ services:
     image: fnsys/dockhand:v1.0.37
     container_name: dockhand
     restart: unless-stopped
-
     env_file:
       - ../.env
       - .env
-
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       PUID: "${PUID}"
       PGID: "${PGID}"

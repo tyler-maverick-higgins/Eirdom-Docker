@@ -17,6 +17,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       POSTGRES_DB: ${NETBOX_DB_NAME}
       POSTGRES_USER: ${NETBOX_DB_USER}
@@ -43,6 +48,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     command: valkey-server --requirepass ${NETBOX_REDIS_PASSWORD}
     volumes:
       - ${DOCKER_DATA_PATH}/netbox/redis:/data
@@ -70,6 +80,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       NETBOX_DB_NAME: ${NETBOX_DB_NAME}
       NETBOX_DB_USER: ${NETBOX_DB_USER}
@@ -139,6 +154,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       NETBOX_DB_NAME: ${NETBOX_DB_NAME}
       NETBOX_DB_USER: ${NETBOX_DB_USER}
@@ -182,6 +202,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       NETBOX_DB_NAME: ${NETBOX_DB_NAME}
       NETBOX_DB_USER: ${NETBOX_DB_USER}

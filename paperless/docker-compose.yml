@@ -22,12 +22,18 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       POSTGRES_DB: ${PAPERLESS_DB_NAME}
       POSTGRES_USER: ${PAPERLESS_DB_USER}
       POSTGRES_PASSWORD: ${PAPERLESS_DB_PASSWORD}
     volumes:
       - ${DOCKER_DATA_PATH}/paperless/db:/var/lib/postgresql/data
+      - ${DOCKER_DATA_PATH}/paperless/consume:/usr/src/paperless/consume
     networks:
       - paperless-internal
     restart: unless-stopped
@@ -44,6 +50,14 @@ services:
   paperless-redis:
     image: valkey/valkey:8-alpine@sha256:cfe71288f087704b06be45e270afa7a2abbf820093d6b11a23762081f5ff321d
     container_name: paperless-redis
+    env_file:
+      - ../.env
+      - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     volumes:
       - ${DOCKER_DATA_PATH}/paperless/redis:/data
     networks:
@@ -66,6 +80,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       PAPERLESS_REDIS: redis://paperless-redis:6379
       PAPERLESS_DBHOST: paperless-db

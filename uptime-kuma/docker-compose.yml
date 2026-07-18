@@ -19,6 +19,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     volumes:
       - ${DOCKER_DATA_PATH}/uptime-kuma:/app/data
       # Docker socket allows monitoring Docker container health

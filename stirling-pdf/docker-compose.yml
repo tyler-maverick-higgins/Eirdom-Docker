@@ -20,6 +20,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       DOCKER_ENABLE_SECURITY: "false"
       # Authentik handles auth via chain-standard — no need

@@ -27,6 +27,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       TZ: ${TZ}
       # Cache notifications for 12 hours so missed alerts

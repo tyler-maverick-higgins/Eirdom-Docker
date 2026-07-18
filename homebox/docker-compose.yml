@@ -22,6 +22,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       TZ: ${TZ}
       HBOX_LOG_LEVEL: info

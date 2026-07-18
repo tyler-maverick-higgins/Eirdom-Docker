@@ -49,6 +49,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       POSTGRES_DB: ${IMMICH_DB_NAME}
       POSTGRES_USER: ${IMMICH_DB_USER}
@@ -80,6 +85,11 @@ services:
   immich-redis:
     image: valkey/valkey:8-alpine
     container_name: immich-redis
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     networks:
       - immich-internal
     restart: unless-stopped
@@ -100,6 +110,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       # CPU-only inference — no GPU acceleration available
       MACHINE_LEARNING_WORKERS: 1
@@ -119,6 +134,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       DB_HOSTNAME: immich-db
       DB_DATABASE_NAME: ${IMMICH_DB_NAME}

@@ -19,6 +19,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       POSTGRES_DB: ${AUTHENTIK_DB_NAME}
       POSTGRES_USER: ${AUTHENTIK_DB_USER}
@@ -42,6 +47,11 @@ services:
   authentik-server:
     image: ghcr.io/goauthentik/server:2026.5.3
     container_name: authentik-server
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     command: server
     env_file:
       - ../.env
@@ -101,6 +111,11 @@ services:
   authentik-worker:
     image: ghcr.io/goauthentik/server:2026.5.3
     container_name: authentik-worker
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     command: worker
     env_file:
       - ../.env

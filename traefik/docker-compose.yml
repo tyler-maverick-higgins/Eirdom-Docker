@@ -11,6 +11,11 @@ services:
     env_file:
       - ../.env
       - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       # Cloudflare DNS challenge credentials
       # Used by Traefik to create/delete TXT records for Let's Encrypt
