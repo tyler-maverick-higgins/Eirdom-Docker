@@ -1,0 +1,68 @@
+services:
+  dockhand:
+    image: fnsys/dockhand:v1.0.37
+    container_name: dockhand
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+      - .env
+
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+
+      DATA_DIR: "${DOCKER_DATA_PATH}/dockhand"
+      HOST_DATA_DIR: "${DOCKER_DATA_PATH}/dockhand"
+
+      COMPOSE_TIMEOUT: "${DOCKHAND_COMPOSE_TIMEOUT:-900}"
+      EXPORT_METRICS: "${DOCKHAND_EXPORT_METRICS:-false}"
+      DISABLE_LOCAL_LOGIN: "${DOCKHAND_DISABLE_LOCAL_LOGIN:-false}"
+      DISABLE_WHATS_NEW: "${DOCKHAND_DISABLE_WHATS_NEW:-false}"
+      SKIP_DF_COLLECTION: "${DOCKHAND_SKIP_DF_COLLECTION:-false}"
+
+      # Uncomment only when Dockhand must trust an internal CA for OIDC,
+      # private registries, Git repositories, or other HTTPS services.
+      # NODE_EXTRA_CA_CERTS: "/certs/eirdom-ca-bundle.pem"
+
+    group_add:
+      - "${DOCKER_GID}"
+
+    volumes:
+      # Grants Dockhand administrative access to the local Docker daemon.
+      - "/var/run/docker.sock:/var/run/docker.sock"
+
+      # Matching host/container paths are intentional. Dockhand resolves
+      # relative stack bind mounts into absolute paths before sending them
+      # to the host Docker daemon.
+      - "${DOCKER_DATA_PATH}/dockhand:${DOCKER_DATA_PATH}/dockhand"
+
+      # Mount the Eirdom-Docker repository at the identical path inside
+      # Dockhand so existing Compose stacks and bind mounts remain valid.
+      - "${EIRDOM_DOCKER_REPO}:${EIRDOM_DOCKER_REPO}"
+
+      # Optional internal CA certificate bundle.
+      # - "${DOCKER_DATA_PATH}/dockhand/certs:/certs:ro"
+
+    networks:
+      - proxy
+
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: proxy
+
+      traefik.http.routers.dockhand.rule: Host(`dockhand.${ROOT_DOMAIN}`)
+      traefik.http.routers.dockhand.entrypoints: websecure
+      traefik.http.routers.dockhand.tls: "true"
+      traefik.http.routers.dockhand.tls.certresolver: cloudflare
+      traefik.http.routers.dockhand.middlewares: chain-public@file
+
+      traefik.http.services.dockhand.loadbalancer.server.port: "3000"
+      traefik.http.services.dockhand.loadbalancer.healthcheck.path: /api/health
+      traefik.http.services.dockhand.loadbalancer.healthcheck.interval: 30s
+      traefik.http.services.dockhand.loadbalancer.healthcheck.timeout: 5s
+
+networks:
+  proxy:
+    external: true
