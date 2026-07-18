@@ -44,7 +44,7 @@ services:
     container_name: authentik-server
     command: server
     env_file:
-      - ../../.env
+      - ../.env
       - .env
     environment:
       AUTHENTIK_REDIS__HOST: ""
@@ -103,7 +103,7 @@ services:
     container_name: authentik-worker
     command: worker
     env_file:
-      - ../../.env
+      - ../.env
       - .env
     environment:
       AUTHENTIK_REDIS__HOST: ""

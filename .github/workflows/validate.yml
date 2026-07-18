@@ -154,6 +154,8 @@ jobs:
         run: |
           set -uo pipefail
 
+          repository_root="$(pwd)"
+
           mapfile -d '' compose_files < <(
             find . \
               -type f \
@@ -175,35 +177,37 @@ jobs:
 
           failed=0
 
+          echo "Repository root: $repository_root"
+          echo "Root environment file:"
+          ls -la "$repository_root/.env"
+
           for compose in "${compose_files[@]}"; do
             compose="${compose#./}"
+
             compose_directory="$(dirname "$compose")"
-            compose_filename="$(basename "$compose")"
+            compose_absolute="$repository_root/$compose"
+            project_directory="$repository_root/$compose_directory"
 
             echo ""
             echo "Validating: $compose"
+            echo "Project directory: $project_directory"
+            echo "Compose file: $compose_absolute"
 
-            # Run from the Compose file's directory so relative paths such
-            # as ../../.env, .env, bind mounts, and config files resolve
-            # the same way they do during normal deployment.
-            if (
-              cd "$compose_directory"
-              docker compose \
-                -f "$compose_filename" \
-                config --quiet
-            ); then
+            if docker compose \
+              --project-directory "$project_directory" \
+              -f "$compose_absolute" \
+              config --quiet; then
+
               echo "✓  $compose"
             else
               echo "✗  $compose — validation failed"
               echo ""
 
-              # Run again without --quiet to display the actual error.
-              (
-                cd "$compose_directory"
-                docker compose \
-                  -f "$compose_filename" \
-                  config
-              ) 2>&1 | head -100
+              docker compose \
+                --project-directory "$project_directory" \
+                -f "$compose_absolute" \
+                config 2>&1 |
+                head -100
 
               failed=1
             fi
