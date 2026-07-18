@@ -34,7 +34,7 @@ entryPoints:
     address: ":443"
     forwardedHeaders:
       trustedIPs:
-        172.18.0.0/16
+        - 172.18.0.0/16
     http:
       tls:
         certResolver: cloudflare

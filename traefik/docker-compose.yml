@@ -6,7 +6,7 @@
 
 services:
   traefik:
-    image: traefik:v3.5@sha256:16acb89c6db341182970d6fdafece31303b0a380a8ed7aa51682e225229bf1d2
+    image: traefik:v3.7.8@sha256:4299bbed850421258fc5448c2e0e6ad350981d4d335a68de11b92448aedbefe5
     container_name: traefik
     env_file:
       - ../.env
