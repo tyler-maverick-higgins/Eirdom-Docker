@@ -119,53 +119,98 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob
 
+          # Every Compose stack references the repository-level .env.
+          # Create it even if a root .env.example is not committed.
           if [[ -f ".env.example" ]]; then
             cp .env.example .env
+            echo "Created shared .env from .env.example"
+          else
+            touch .env
+            echo "Created empty shared .env for CI validation"
           fi
 
-          env_examples=(*/.env.example)
-
-          for env_example in "${env_examples[@]}"; do
+          # Recursively create a local .env beside every .env.example.
+          while IFS= read -r -d '' env_example; do
             env_file="${env_example%.example}"
+
+            # The root .env was already handled above.
+            if [[ "$env_file" == "./.env" ]]; then
+              continue
+            fi
+
             cp "$env_example" "$env_file"
-            echo "Created $env_file"
-          done
+            echo "Created ${env_file#./}"
+          done < <(
+            find . \
+              -type f \
+              -name ".env.example" \
+              -not -path "./.git/*" \
+              -print0
+          )
 
       - name: Validate all Docker Compose files
         shell: bash
         run: |
           set -uo pipefail
-          shopt -s nullglob
 
-          compose_files=(*/docker-compose.yml)
+          mapfile -d '' compose_files < <(
+            find . \
+              -type f \
+              \( \
+                -name "docker-compose.yml" -o \
+                -name "docker-compose.yaml" -o \
+                -name "compose.yml" -o \
+                -name "compose.yaml" \
+              \) \
+              -not -path "./.git/*" \
+              -print0 |
+            sort -z
+          )
 
           if (( ${#compose_files[@]} == 0 )); then
-            echo "::error::No docker-compose.yml files were found."
+            echo "::error::No Docker Compose files were found."
             exit 1
           fi
 
           failed=0
 
           for compose in "${compose_files[@]}"; do
-            service="$(basename "$(dirname "$compose")")"
+            compose="${compose#./}"
+            compose_directory="$(dirname "$compose")"
+            compose_filename="$(basename "$compose")"
 
-            if docker compose -f "$compose" config --quiet; then
-              echo "✓  $service"
+            echo ""
+            echo "Validating: $compose"
+
+            # Run from the Compose file's directory so relative paths such
+            # as ../../.env, .env, bind mounts, and config files resolve
+            # the same way they do during normal deployment.
+            if (
+              cd "$compose_directory"
+              docker compose \
+                -f "$compose_filename" \
+                config --quiet
+            ); then
+              echo "✓  $compose"
             else
-              echo "✗  $service — validation failed"
+              echo "✗  $compose — validation failed"
               echo ""
 
               # Run again without --quiet to display the actual error.
-              docker compose -f "$compose" config 2>&1 | head -50
+              (
+                cd "$compose_directory"
+                docker compose \
+                  -f "$compose_filename" \
+                  config
+              ) 2>&1 | head -100
 
-              echo ""
               failed=1
             fi
           done
 
           if (( failed == 1 )); then
+            echo ""
             echo "::error::One or more Compose files failed validation."
             exit 1
           fi
@@ -216,6 +261,7 @@ jobs:
           done
 
           if (( failed == 1 )); then
+            echo ""
             echo "::error::One or more shell scripts failed ShellCheck."
             exit 1
           fi
