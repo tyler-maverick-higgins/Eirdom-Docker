@@ -18,7 +18,7 @@
 
 .RECIPEPREFIX = >
 
-ROOT_ENV  := ../../.env
+ROOT_ENV  := ../.env
 # add --env-file .env only if the chosen stack actually has a local .env
 local_env  = $(if $(wildcard $(SVC)/.env),--env-file .env,)
 compose    = docker compose --env-file $(ROOT_ENV) $(local_env)
@@ -58,10 +58,10 @@ validate: _guard
 
 up-all:
 > @for s in $(STACKS); do echo "==> up $$s"; \
->   ( cd $$s && docker compose --env-file ../../.env $$([ -f .env ] && echo --env-file .env) up -d ) || exit 1; \
+>   ( cd $$s && docker compose --env-file ../.env $$([ -f .env ] && echo --env-file .env) up -d ) || exit 1; \
 > done
 
 down-all:
 > @for s in $(STACKS); do echo "==> down $$s"; \
->   ( cd $$s && docker compose --env-file ../../.env $$([ -f .env ] && echo --env-file .env) down ) || true; \
+>   ( cd $$s && docker compose --env-file ../.env $$([ -f .env ] && echo --env-file .env) down ) || true; \
 > done
