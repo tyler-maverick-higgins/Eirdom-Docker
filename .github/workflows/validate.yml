@@ -65,7 +65,8 @@ jobs:
       NETBOX_DB_USER: netbox
       NETBOX_DB_PASSWORD: dummy_netbox_db_password
       NETBOX_REDIS_PASSWORD: dummy_redis_password
-      NETBOX_LDAP_BIND_DN: "CN=netbox-svc,OU=Service Accounts,DC=ad,DC=eirdom,DC=homes"
+      NETBOX_LDAP_BIND_DN: >-
+        CN=netbox-svc,OU=Service Accounts,DC=ad,DC=eirdom,DC=homes
       NETBOX_LDAP_BIND_PASSWORD: dummy_ldap_password
 
       # Jellyfin / Jellystat
@@ -114,31 +115,58 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create .env files from examples
+      - name: Create test environment files
+        shell: bash
         run: |
-          cp .env.example .env
-          for dir in docker/*/; do
-            [ -f "$dir/.env.example" ] && cp "$dir/.env.example" "$dir/.env"
+          set -euo pipefail
+          shopt -s nullglob
+
+          if [[ -f ".env.example" ]]; then
+            cp .env.example .env
+          fi
+
+          env_examples=(*/.env.example)
+
+          for env_example in "${env_examples[@]}"; do
+            env_file="${env_example%.example}"
+            cp "$env_example" "$env_file"
+            echo "Created $env_file"
           done
 
       - name: Validate all Docker Compose files
+        shell: bash
         run: |
-          FAILED=0
-          for compose in docker/*/docker-compose.yml; do
-            SERVICE=$(basename $(dirname $compose))
-            if docker compose -f "$compose" config --quiet 2>/dev/null; then
-              echo "✓  $SERVICE"
+          set -uo pipefail
+          shopt -s nullglob
+
+          compose_files=(*/docker-compose.yml)
+
+          if (( ${#compose_files[@]} == 0 )); then
+            echo "::error::No docker-compose.yml files were found."
+            exit 1
+          fi
+
+          failed=0
+
+          for compose in "${compose_files[@]}"; do
+            service="$(basename "$(dirname "$compose")")"
+
+            if docker compose -f "$compose" config --quiet; then
+              echo "✓  $service"
             else
-              echo "✗  $SERVICE — validation failed"
-              # Run again without --quiet to show the actual error
-              docker compose -f "$compose" config 2>&1 | head -20
-              FAILED=1
+              echo "✗  $service — validation failed"
+              echo ""
+
+              # Run again without --quiet to display the actual error.
+              docker compose -f "$compose" config 2>&1 | head -50
+
+              echo ""
+              failed=1
             fi
           done
 
-          if [ "$FAILED" -eq 1 ]; then
-            echo ""
-            echo "One or more compose files failed validation."
+          if (( failed == 1 )); then
+            echo "::error::One or more Compose files failed validation."
             exit 1
           fi
 
@@ -155,33 +183,46 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install ShellCheck
-        run: sudo apt-get install -y shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: Lint shell scripts
+        shell: bash
         run: |
-          FAILED=0
-          for script in scripts/*.sh; do
-            # SC2034: unused variable — false positives in bash are common
-            # SC1091: not following sourced files — .env files aren't in CI
-            if shellcheck --shell=bash \
-                          --severity=error \
-                          --exclude=SC2034,SC1091,SC1036,SC1072,SC1073 \
-                          "$script"; then
+          set -uo pipefail
+          shopt -s nullglob
+
+          scripts=(scripts/*.sh)
+
+          if (( ${#scripts[@]} == 0 )); then
+            echo "No shell scripts found in scripts/. Skipping."
+            exit 0
+          fi
+
+          failed=0
+
+          for script in "${scripts[@]}"; do
+            # SC2034: unused variables can be intentional.
+            # SC1091: sourced .env files are not present in CI.
+            if shellcheck \
+              --shell=bash \
+              --severity=error \
+              --exclude=SC2034,SC1091,SC1036,SC1072,SC1073 \
+              "$script"; then
               echo "✓  $script"
             else
-              FAILED=1
+              echo "✗  $script"
+              failed=1
             fi
           done
 
-          if [ "$FAILED" -eq 1 ]; then
-            echo ""
-            echo "One or more shell scripts failed ShellCheck."
+          if (( failed == 1 )); then
+            echo "::error::One or more shell scripts failed ShellCheck."
             exit 1
           fi
 
   # ============================================================
   # YAML Linting
-  # Validates Traefik dynamic config, recyclarr.yml, and other
+  # Validates Traefik dynamic config, Recyclarr, and other
   # standalone YAML files for syntax errors
   # ============================================================
   lint-yaml:
@@ -196,7 +237,30 @@ jobs:
         run: pip install yamllint
 
       - name: Lint YAML files
+        shell: bash
         run: |
+          set -euo pipefail
+
+          yaml_files=(
+            "traefik/traefik.yml"
+            "traefik/dynamic/middlewares.yml"
+            "traefik/dynamic/routers.yml"
+            "arr-stack/recyclarr.yml"
+          )
+
+          missing=0
+
+          for yaml_file in "${yaml_files[@]}"; do
+            if [[ ! -f "$yaml_file" ]]; then
+              echo "::error file=$yaml_file::Expected YAML file does not exist."
+              missing=1
+            fi
+          done
+
+          if (( missing == 1 )); then
+            exit 1
+          fi
+
           yamllint \
             --config-data '{
               extends: default,
@@ -209,7 +273,4 @@ jobs:
                 new-line-at-end-of-file: disable
               }
             }' \
-            docker/traefik/traefik.yml \
-            docker/traefik/dynamic/middlewares.yml \
-            docker/traefik/dynamic/routers.yml \
-            docker/arr-stack/recyclarr.yml
+            "${yaml_files[@]}"
