@@ -64,8 +64,8 @@ certificatesResolvers:
         resolvers:
           - "1.1.1.1:53"
           - "9.9.9.9:53"
-        delayBeforeCheck: "30s"
-
+        propagation:
+          delayBeforeChecks: "30s"
 # -----------------------------------------------------------
 # Providers
 # Docker provider — auto-discovers containers via labels
