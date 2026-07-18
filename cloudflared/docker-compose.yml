@@ -3,7 +3,7 @@ services:
     image: cloudflare/cloudflared:1887-ecb88678f136@sha256:188bb03589a32affed3cf4d0590565ffe67b78866e6b5582574afab2b705bafe
     container_name: cloudflared
     env_file:
-      - ../../.env
+      - ../.env
       - .env
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     networks:

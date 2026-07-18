@@ -20,7 +20,7 @@ services:
     image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     container_name: paperless-db
     env_file:
-      - ../../.env
+      - ../.env
       - .env
     environment:
       POSTGRES_DB: ${PAPERLESS_DB_NAME}
@@ -64,7 +64,7 @@ services:
     image: ghcr.io/paperless-ngx/paperless-ngx:v2.20.15
     container_name: paperless
     env_file:
-      - ../../.env
+      - ../.env
       - .env
     environment:
       PAPERLESS_REDIS: redis://paperless-redis:6379

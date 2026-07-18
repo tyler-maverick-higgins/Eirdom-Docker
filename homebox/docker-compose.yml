@@ -20,7 +20,7 @@ services:
     image: ghcr.io/sysadminsmedia/homebox:v0.19.0
     container_name: homebox
     env_file:
-      - ../../.env
+      - ../.env
       - .env
     environment:
       TZ: ${TZ}

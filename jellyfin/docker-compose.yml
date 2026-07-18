@@ -26,7 +26,7 @@ services:
     image: lscr.io/linuxserver/jellyfin:2026070606@sha256:c611196d806ee768b5bdd45c9d23b3d47f6235d9eac7af59cccac32ba8f8e178
     container_name: jellyfin
     env_file:
-      - ../../.env
+      - ../.env
       - .env
     environment:
       PUID: ${PUID}
@@ -68,7 +68,7 @@ services:
     image: fallenbagel/jellyseerr:sha-42eec24@sha256:d0386e634a1902a50d6178aa0a806a07fffb49adfc681e3b71faf2d9f302f302
     container_name: jellyseerr
     env_file:
-      - ../../.env
+      - ../.env
       - .env
     environment:
       TZ: ${TZ}
@@ -101,7 +101,7 @@ services:
     image: postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
     container_name: jellystat-db
     env_file:
-      - ../../.env
+      - ../.env
       - .env
     environment:
       POSTGRES_DB: ${JELLYSTAT_DB_NAME}
@@ -128,7 +128,7 @@ services:
     image: cyfershepard/jellystat:1.1.11@sha256:c4e2dfa8bddf8d5ac3a675d7202f71a54dcfe3540cc186899d9201e0fe701fa5
     container_name: jellystat
     env_file:
-      - ../../.env
+      - ../.env
       - .env
     environment:
       POSTGRES_USER: ${JELLYSTAT_DB_USER}

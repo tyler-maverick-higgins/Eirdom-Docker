@@ -38,7 +38,7 @@ services:
     image: ghcr.io/home-assistant/home-assistant:2026.7.1
     container_name: homeassistant
     env_file:
-      - ../../.env
+      - ../.env
       - .env
     environment:
       TZ: ${TZ}

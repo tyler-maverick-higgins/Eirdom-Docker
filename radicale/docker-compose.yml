@@ -3,7 +3,7 @@ services:
     image: tomsquest/docker-radicale:3.7.5.0@sha256:e4e694f859c5580c8e925d15905cae36b378150b43ab9b71c52f9cfeed4a3906
     container_name: radicale
     env_file:
-      - ../../.env
+      - ../.env
       - .env
     read_only: true
     security_opt:
