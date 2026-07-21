@@ -17,7 +17,7 @@ services:
   # SQLite-backed, single container, no external dependencies
   # -----------------------------------------------------------
   homebox:
-    image: ghcr.io/sysadminsmedia/homebox:v0.19.0
+    image: ghcr.io/sysadminsmedia/homebox:latest
     container_name: homebox
     env_file:
       - ../.env
@@ -29,12 +29,14 @@ services:
         max-file: "5"
     environment:
       TZ: ${TZ}
-      HBOX_LOG_LEVEL: info
-      HBOX_LOG_FORMAT: text
       # Storage path inside container
       HBOX_STORAGE_DATA: /data/
       # Set base URL for correct link generation
       HBOX_WEB_MAX_UPLOAD_SIZE: 10
+      HBOX_AUTH_API_KEY_PEPPER: ${HBOX_AUTH_API_KEY_PEPPER}
+      HBOX_OPTIONS_TRUST_PROXY: ${HBOX_OPTIONS_TRUST_PROXY:-true}
+      HBOX_LOG_LEVEL: ${HBOX_LOG_LEVEL:-info}
+      HBOX_LOG_FORMAT: ${HBOX_LOG_FORMAT:-text}
     volumes:
       - ${DOCKER_DATA_PATH}/homebox:/data
     networks:

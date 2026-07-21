@@ -59,7 +59,7 @@ services:
       traefik.http.routers.dockhand.entrypoints: websecure
       traefik.http.routers.dockhand.tls: "true"
       traefik.http.routers.dockhand.tls.certresolver: cloudflare
-      traefik.http.routers.dockhand.middlewares: chain-public@file
+      traefik.http.routers.dockhand.middlewares: security-headers@file
 
       traefik.http.services.dockhand.loadbalancer.server.port: "3000"
       traefik.http.services.dockhand.loadbalancer.healthcheck.path: /api/health
