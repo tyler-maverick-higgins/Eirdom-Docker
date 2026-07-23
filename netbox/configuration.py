@@ -96,8 +96,14 @@ REMOTE_AUTH_BACKEND = 'netbox.authentication.LDAPBackend'
 import ldap
 from django_auth_ldap.config import LDAPSearch, GroupOfNamesType, NestedActiveDirectoryGroupType
 
+# Configure LDAP to trust the Eirdom Active Directory CA
+ldap.set_option(
+    ldap.OPT_X_TLS_CACERTFILE,
+    "/etc/ssl/certs/ca-certificates.crt",
+)
+
 # LDAP server
-AUTH_LDAP_SERVER_URI = os.environ.get('LDAP_SERVER', 'ldap://10.1.10.10')
+AUTH_LDAP_SERVER_URI = os.environ.get('LDAP_SERVER', 'ldaps://10.1.10.10')
 
 # Bind account — dedicated service account in AD
 # CN=netbox-svc,OU=Service Accounts,OU=Eirdom,DC=ad,DC=eirdom,DC=homes
@@ -105,7 +111,7 @@ AUTH_LDAP_BIND_DN = os.environ.get('LDAP_BIND_DN', '')
 AUTH_LDAP_BIND_PASSWORD = os.environ.get('LDAP_BIND_PASSWORD', '')
 
 # TLS — use STARTTLS on port 389
-AUTH_LDAP_START_TLS = True
+AUTH_LDAP_START_TLS = False
 
 # User search
 AUTH_LDAP_USER_SEARCH = LDAPSearch(

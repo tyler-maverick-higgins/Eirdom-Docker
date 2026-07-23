@@ -1,4 +1,5 @@
 # NetBox
+
 > Network Documentation & IPAM
 > NetBox v4.5 · netbox_unifi_sync plugin · AD LDAP authentication
 > Part of the Eirdom infrastructure
@@ -12,6 +13,7 @@ Eirdom infrastructure. It tracks IP addresses, VLANs, devices,
 cables, rack layouts, and network topology.
 
 **Key integrations:**
+
 - **Active Directory** — users authenticate with AD credentials
 - **netbox_unifi_sync** — automatically syncs UniFi devices, VLANs,
   WLANs, and DHCP scopes from the UDM-Pro-Max into NetBox
@@ -28,7 +30,7 @@ through Cloudflare Tunnel)
 
 ## Repository Structure
 
-```
+``` text
 docker/netbox/
 ├── docker-compose.yml
 ├── Dockerfile            # Custom image with netbox_unifi_sync plugin
@@ -57,12 +59,12 @@ The custom image is tagged `eirdom/netbox:v4.5` and is built locally
 ### Four Containers
 
 | Container | Role |
+
 |-----------|------|
 | `netbox-postgres` | PostgreSQL database |
 | `netbox-redis` | Task queue (Valkey/Redis compatible) |
 | `netbox` | Main web application |
 | `netbox-worker` | Background jobs — UniFi sync, webhooks |
-| `netbox-housekeeping` | Daily cleanup — sessions, changelogs |
 
 ---
 
@@ -90,6 +92,7 @@ Create the following groups in
 `OU=Security Groups,OU=Groups,OU=Eirdom,DC=ad,DC=eirdom,DC=homes`:
 
 | Group Name | NetBox Role | Who Gets This |
+
 |------------|------------|---------------|
 | `NetBox-Users` | Can log in | All family members who use NetBox |
 | `NetBox-Staff` | Staff access | Tyler (admin) |
@@ -111,18 +114,25 @@ the UDM-Pro-Max. Do not use your admin account.
 ### Step 4 — Create data directories
 
 ```bash
-mkdir -p ${DOCKER_DATA_PATH}/netbox/postgres
-mkdir -p ${DOCKER_DATA_PATH}/netbox/redis
-mkdir -p ${DOCKER_DATA_PATH}/netbox/media
-mkdir -p ${DOCKER_DATA_PATH}/netbox/reports
-mkdir -p ${DOCKER_DATA_PATH}/netbox/scripts
-chown -R 1000:1000 ${DOCKER_DATA_PATH}/netbox
+sudo mkdir -p /opt/eirdom/appdata/netbox/{postgres,redis,media,reports,scripts}
+
+sudo chown -R 70:70 /opt/eirdom/appdata/netbox/postgres
+
+sudo chown -R 999:0 \
+  /opt/eirdom/appdata/netbox/media \
+  /opt/eirdom/appdata/netbox/reports \
+  /opt/eirdom/appdata/netbox/scripts
+
+sudo chmod -R 775 \
+  /opt/eirdom/appdata/netbox/media \
+  /opt/eirdom/appdata/netbox/reports \
+  /opt/eirdom/appdata/netbox/scripts
 ```
 
 ### Step 5 — Fill in .env
 
 ```bash
-cd docker/netbox
+cd netbox
 cp .env.example .env
 nano .env
 ```
@@ -149,14 +159,14 @@ Store all three in your password manager before adding to `.env`.
 ### Step 1 — Build the custom image
 
 ```bash
-cd docker/netbox
+cd netbox
 docker compose build
 ```
 
 This pulls the base NetBox image and installs the `netbox_unifi_sync`
 plugin. First build takes 2–3 minutes. Watch for:
 
-```
+``` text
 Successfully installed netbox-unifi-sync
 ```
 
@@ -168,6 +178,7 @@ docker compose logs -f
 ```
 
 Watch for:
+
 - `netbox-postgres` → `database system is ready to accept connections`
 - `netbox-redis` → `Ready to accept connections`
 - `netbox` → `Starting development server` or `Gunicorn ready`
@@ -315,6 +326,7 @@ The netbox-worker container handles the scheduled job execution.
 ### Step 1 — Verify AD groups exist
 
 Confirm the three groups from Phase 1 Step 2 exist in AD:
+
 - `NetBox-Users`
 - `NetBox-Staff`
 - `NetBox-Admins`
@@ -432,6 +444,7 @@ print('LDAP connection successful')
 ```
 
 Common issues:
+
 - VLAN 50 → VLAN 10 firewall rule needs TCP 389 open for LDAP
   (check `lan-rules.md` — Docker → Corporate DNS rule only covers
   port 53, LDAP on 389 needs its own rule)
@@ -449,6 +462,7 @@ your network.
 
 If UniFi device models don't match imported device types, the sync
 creates the devices without a device type. Fix by:
+
 1. Verifying the device type exists in NetBox (check manufacturer
    spelling — must be exactly `Ubiquiti`)
 2. Manually assigning the device type in the device edit view
@@ -461,7 +475,7 @@ creates the devices without a device type. Fix by:
 
 Add to internal DNS on EIRDOM-DC-01:
 
-```
+```text
 netbox.eirdom.homes    A    10.1.50.10
 ```
 

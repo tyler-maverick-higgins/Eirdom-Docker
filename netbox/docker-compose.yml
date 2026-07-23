@@ -143,11 +143,6 @@ services:
   # Must use the SAME custom image as the netbox container
   # -----------------------------------------------------------
   netbox-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        NETBOX_VERSION: v4.5
     image: eirdom/netbox:v4.5
     container_name: netbox-worker
     command: /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py rqworker
@@ -159,6 +154,14 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "ps -aux | grep -v grep | grep -q rqworker || exit 1"
+      start_period: 30s
+      interval: 30s
+      timeout: 5s
+      retries: 3
     environment:
       NETBOX_DB_NAME: ${NETBOX_DB_NAME}
       NETBOX_DB_USER: ${NETBOX_DB_USER}
@@ -181,44 +184,7 @@ services:
       - ${DOCKER_DATA_PATH}/netbox/scripts:/opt/netbox/netbox/scripts
     networks:
       - netbox-internal
-    depends_on:
-      netbox:
-        condition: service_healthy
-    restart: unless-stopped
-
-  # -----------------------------------------------------------
-  # NetBox Housekeeping — runs daily maintenance tasks
-  # Cleans expired sessions, old changelogs, etc.
-  # -----------------------------------------------------------
-  netbox-housekeeping:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        NETBOX_VERSION: v4.5
-    image: eirdom/netbox:v4.5
-    container_name: netbox-housekeeping
-    command: /opt/netbox/housekeeping.sh
-    env_file:
-      - ../.env
-      - .env
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "5"
-    environment:
-      NETBOX_DB_NAME: ${NETBOX_DB_NAME}
-      NETBOX_DB_USER: ${NETBOX_DB_USER}
-      NETBOX_DB_PASSWORD: ${NETBOX_DB_PASSWORD}
-      NETBOX_REDIS_PASSWORD: ${NETBOX_REDIS_PASSWORD}
-      NETBOX_SECRET_KEY: ${NETBOX_SECRET_KEY}
-      TZ: ${TZ}
-    volumes:
-      - ./configuration.py:/etc/netbox/config/configuration.py:ro
-      - ${DOCKER_DATA_PATH}/netbox/media:/opt/netbox/netbox/media
-    networks:
-      - netbox-internal
+      - netbox-egress
     depends_on:
       netbox:
         condition: service_healthy
@@ -230,3 +196,5 @@ networks:
   netbox-internal:
     driver: bridge
     internal: true
+  netbox-egress:
+    driver: bridge

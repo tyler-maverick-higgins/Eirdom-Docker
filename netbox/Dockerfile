@@ -11,10 +11,16 @@
 ARG NETBOX_VERSION=v4.5
 FROM netboxcommunity/netbox:${NETBOX_VERSION}
 
+# Copy local_requirements.txt into the image so that the plugin is reinstalled automatically if the base image is updated
+COPY local_requirements.txt /opt/netbox/local_requirements.txt
+
 # Install the UniFi sync plugin
 # This also installs all plugin dependencies into the NetBox venv
-RUN /opt/netbox/venv/bin/pip install netbox-unifi-sync
+RUN /opt/netbox/venv/bin/pip install \
+    --no-cache-dir \
+    -r /opt/netbox/local_requirements.txt
 
-# Copy plugin requirements into local_requirements.txt so the
-# plugin is reinstalled automatically if the base image is updated
-RUN echo "netbox-unifi-sync" >> /opt/netbox/local_requirements.txt
+# Trust Eirdom Active Directory CA
+COPY eirdom-ldap-ca-bundle.pem /usr/local/share/ca-certificates/eirdom-ldap-ca.crt
+
+RUN update-ca-certificates
